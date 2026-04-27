@@ -20,9 +20,34 @@ Não deve existir uma tabela separada e isolada para `Customer` (Cliente) e `Use
 
 ---
 
-## 2. Modelagem de Dados de Alta Performance (Prisma Schema)
+## 2. Regra de Ouro: Normalização de Tabelas para Segurança e Escalabilidade
 
-Abaixo está o reflexo do nosso banco de dados, desenhado com foco em crescimento, recorrência e **segurança e auditoria**:
+> ⚠️ **Esta é uma regra inegociável do projeto.**
+
+A tabela `User` deve conter **apenas dados de identidade e autenticação**: `id`, `phone`, `email`, `password_hash`, `is_registered`. **Ponto.**
+
+Todo dado de negócio, configuração ou integração de terceiros vai em tabelas separadas com relação 1:1. Os benefícios são:
+
+1. **Segurança por contenção:** Uma invasão que leia apenas a tabela `User` obtém nome, telefone e hash de senha — informação de identidade. Ela **não** obtém chaves PIX, credenciais de integração, configurações de WhatsApp ou dados de pagamento. Cada tabela representa um perímetro de segurança isolado.
+2. **Escalabilidade:** Tabelas enxutas são mais rápidas em queries e índices. Uma tabela `User` com 1 milhão de linhas e 30 colunas é um problema. A mesma com 7 colunas é trivial.
+3. **Manutenção:** Novos módulos adicionam suas próprias tabelas sem alterar o core de autenticação.
+
+**Padrão obrigatório para qualquer nova feature:**
+
+| Tipo de dado | Tabela correta |
+|---|---|
+| Identidade/Auth | `User` |
+| Dados de negócio do lojista (PIX, nome empresa) | `CreditorProfile` |
+| Configurações de integração de 3ºs (Z-API, Asaas) | `IntegrationConfig` |
+| Templates de mensagem WhatsApp | `MessageTemplate` |
+| Assinatura/Plano | `Subscription` |
+| Endereços | `Address` (tabela futura) |
+
+---
+
+## 3. Modelagem de Dados de Alta Performance (Prisma Schema)
+
+Abaixo está o reflexo do nosso banco de dados, desenhado com foco em crescimento, recorrência, **segurança e auditoria**:
 
 ```prisma
 model User {

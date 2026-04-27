@@ -161,12 +161,14 @@ model AuditLog {
 ### 3.1 Esteira de Planos e Limites (Upsell)
 A plataforma terá múltiplos degraus de planos, permitindo capturar tanto o autônomo iniciante quanto grandes clínicas.
 
-*   **FREE (Gratuito):** Até 10 cobranças/mês. Envio de WhatsApp 100% manual. Sem cobrança em massa.
-*   **STARTER (Ex: R$ 29/mês):** Até 50 cobranças/mês. Automação de WhatsApp ativada (robô cobra sozinho). Sem rotinas recorrentes.
-*   **PRO (Ex: R$ 69/mês):** Até 200 cobranças/mês. Automação ativada + **Rotinas e Cobrança em Massa**.
-*   **UNLIMITED (Ex: R$ 149/mês):** Cobranças ilimitadas. Gestão de múltiplos usuários na mesma conta (time/funcionários) e acesso à API.
+*   **FREE (Gratuito):** Até 10 cobranças/mês. Somente cobrança **ÚNICA** (ONCE). Envio de WhatsApp 100% manual. Sem cobrança em massa.
+*   **STARTER (Ex: R$ 29/mês):** Até 50 cobranças/mês. Automação de WhatsApp ativada. Permite cobrança **ÚNICA** (ONCE) e **SEMANAL** (WEEKLY).
+*   **PRO (Ex: R$ 69/mês):** Até 200 cobranças/mês. Automação ativada + **Rotinas e Cobrança em Massa**. Permite todas as recorrências (**ONCE, WEEKLY, MONTHLY, YEARLY**).
+*   **UNLIMITED (Ex: R$ 149/mês):** Cobranças ilimitadas. Gestão de múltiplos usuários. Permite todas as recorrências (**ONCE, WEEKLY, MONTHLY, YEARLY**).
 
-*   **O Gatilho (Paywall):** Ao tentar chamar a rota `POST /charges`, o back-end consulta a `Subscription` do `creditor_id` e faz o `COUNT` do ciclo. Se estourar o limite daquele plano, bloqueia com HTTP 403 `LIMIT_REACHED`, ativando o pop-up de upgrade no Front-End.
+*   **O Gatilho (Paywall):** Ao tentar chamar a rota `POST /charges`, o back-end consulta a `Subscription` do `creditor_id`.
+    * Se estourar o limite de quantidade daquele plano, bloqueia com HTTP 403 `LIMIT_REACHED`.
+    * Se tentar enviar uma recorrência não permitida pelo plano (ex: tentar MONTHLY no plano FREE), bloqueia com HTTP 403 `RECURRENCE_NOT_ALLOWED`.
 
 ### 3.2 O Motor de Automação de WhatsApp (O Coração do Produto)
 A verdadeira dor do seu público-alvo é **não ter que cobrar as pessoas na mão**. O produto precisa fazer o "trabalho sujo" de ser o "chato" da cobrança.

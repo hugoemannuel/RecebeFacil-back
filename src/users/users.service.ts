@@ -22,12 +22,14 @@ export class UsersService {
   async registerUser(dto: RegisterDto) {
     const existingEmail = await this.findByEmail(dto.email);
     if (existingEmail && existingEmail.is_registered) {
-      throw new ConflictException('E-mail já está em uso.');
+      console.error(`[Auth] Falha no cadastro: E-mail já está em uso (${dto.email})`);
+      throw new ConflictException('Não foi possível realizar o cadastro. Verifique os dados informados.');
     }
 
     const existingPhone = await this.findByPhone(dto.phone);
     if (existingPhone && existingPhone.is_registered) {
-      throw new ConflictException('Telefone já está em uso.');
+      console.error(`[Auth] Falha no cadastro: Telefone já está em uso (${dto.phone})`);
+      throw new ConflictException('Não foi possível realizar o cadastro. Verifique os dados informados.');
     }
 
     const password_hash = await bcrypt.hash(dto.password, 12);
@@ -35,8 +37,10 @@ export class UsersService {
     // Se existe como shadow user pelo e-mail ou telefone, nós atualizamos
     const shadowUser = existingEmail || existingPhone;
 
+    let user;
+
     if (shadowUser) {
-      return this.prisma.user.update({
+      user = await this.prisma.user.update({
         where: { id: shadowUser.id },
         data: {
           name: dto.name,
@@ -46,17 +50,42 @@ export class UsersService {
           is_registered: true,
         },
       });
+
+      await this.prisma.auditLog.create({
+        data: {
+          user_id: user.id,
+          action: 'USER_REGISTERED_FROM_SHADOW',
+          entity: 'User',
+          entity_id: user.id,
+          details: { 
+            previous_state: { email: shadowUser.email, phone: shadowUser.phone },
+            new_state: { email: user.email, phone: user.phone }
+          }
+        }
+      });
+    } else {
+      // Caso não exista de forma alguma, criamos um novo
+      user = await this.prisma.user.create({
+        data: {
+          name: dto.name,
+          email: dto.email,
+          phone: dto.phone,
+          password_hash,
+          is_registered: true,
+        },
+      });
+
+      await this.prisma.auditLog.create({
+        data: {
+          user_id: user.id,
+          action: 'USER_REGISTERED_NEW',
+          entity: 'User',
+          entity_id: user.id,
+          details: { email: user.email, phone: user.phone }
+        }
+      });
     }
 
-    // Caso não exista de forma alguma, criamos um novo
-    return this.prisma.user.create({
-      data: {
-        name: dto.name,
-        email: dto.email,
-        phone: dto.phone,
-        password_hash,
-        is_registered: true,
-      },
-    });
+    return user;
   }
 }

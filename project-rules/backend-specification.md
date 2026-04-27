@@ -184,6 +184,7 @@ Para atender a dor de quem cobra muitos alunos/clientes de uma vez (ex: Personal
 A aplicação segue os preceitos do `security-guidelines.md`:
 *   **AuditLog:** Qualquer deleção, downgrade de plano ou marcação manual de pagamento (onde possa haver fraude interna) deve popular a tabela `AuditLog`.
 *   **IDOR e Acesso:** Todas as queries em `Charge`, `Subscription` ou `RecurringCharge` **devem obrigatoriamente** carregar o `WHERE { creditor_id: req.user.id }` para garantir que um lojista não espione o outro.
+*   **Prevenção de User Enumeration:** Durante o cadastro ou recuperação de senha, a API **nunca** deve retornar mensagens explícitas de que "O e-mail/telefone já está em uso" para o Front-End, pois isso permite que atacantes descubram quais usuários estão na base. Deve-se retornar um erro genérico (ex: "Não foi possível realizar o cadastro com os dados informados") e logar o motivo real apenas no console do servidor (`console.error`).
 
 ---
 

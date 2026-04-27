@@ -191,8 +191,15 @@ A aplicação segue os preceitos do `security-guidelines.md`:
 ## 7. Qualidade e Testes Automatizados (TDD)
 A estabilidade financeira exige cobertura de testes rigorosa. A regra do projeto é inegociável: **Nenhuma funcionalidade sobe para produção sem estar coberta por testes automatizados**.
 
-*   **Testes Unitários:** Todo Service (`*.service.ts`) e Controller (`*.controller.ts`) deve possuir um arquivo `.spec.ts` equivalente validando casos de sucesso e de falha (erros esperados).
-*   **Mocks:** Interações com o banco de dados (Prisma) e serviços externos (JWT, APIs) devem ser "mockados" nos testes unitários para garantir isolamento e velocidade de execução.
+*   **Testes Unitários:** Todo Service (`*.service.ts`), Controller (`*.controller.ts`) e Guard (`*.guard.ts`) deve possuir um arquivo `.spec.ts` equivalente validando casos de sucesso e de falha (erros esperados).
+*   **Guards e Helpers em `common/`:** Guards de segurança (ex: `PlanGuard`) e helpers críticos (ex: `plan-modules.ts`) DEVEM ter testes unitários cobrindo todas as combinações de plano/módulo. Falhas de segurança não testadas são bugs em produção.
+*   **Cenários Obrigatórios em Testes de Guard/Service:**
+    *   Caminho feliz (sucesso).
+    *   Usuário sem assinatura → comportamento FREE.
+    *   Assinatura com status `CANCELED` ou `PAST_DUE` → acesso degradado para FREE.
+    *   Acesso negado a módulo premium com plano FREE.
+    *   Idempotência: mesma ação executada duas vezes não gera duplicação.
+*   **Mocks:** Interações com o banco de dados (Prisma) e serviços externos (JWT, APIs, Asaas) devem ser "mockados" nos testes unitários para garantir isolamento e velocidade de execução.
 *   **Comandos:** Utilize `npm run test` para rodar a suíte de testes do NestJS baseada no Jest.
 
 ---
@@ -209,8 +216,59 @@ A aplicação utiliza o Docker para gerenciar o banco de dados PostgreSQL local 
 
 ---
 
-## 8. Próximos Passos (Ação)
+## 9. Controle de Acesso por Módulo (Plan Gating)
 
-1. **Testar Autenticação (Front-End -> Back-End):** Conectar os formulários de Cadastro e Login do Front-End (Next.js) para chamarem as rotas `/auth/register` e `/auth/login` recém-criadas.
-2. **Dashboard e Middlewares (Front-End):** Criar o `middleware.ts` no Front-End para proteger a rota `/dashboard` contra usuários não logados, lendo o cookie JWT.
-3. **Módulo de Cobrança (Back-End):** Desenvolver o `ChargeModule` para permitir a criação das primeiras cobranças, aplicando as regras de IDOR e Shadow User.
+O front-end e o back-end devem respeitar a seguinte matriz de módulos por plano de assinatura. **Qualquer rota ou componente que esteja fora do plano do usuário deve retornar `403 FORBIDDEN` (back-end) e ser ocultado / exibir um paywall (front-end).**
+
+| Módulo                  | FREE | STARTER | PRO |
+|-------------------------|:----:|:-------:|:---:|
+| Home (Dashboard)        | ✅   | ✅      | ✅  |
+| Cobranças               | ✅   | ✅      | ✅  |
+| Clientes                | ❌   | ✅      | ✅  |
+| Relatórios              | ❌   | ✅      | ✅  |
+| Importação via Excel    | ❌   | ✅      | ✅  |
+
+**Implementação:**
+*   **Back-end:** Middleware `PlanGuard` que lê `req.user.subscription.plan_type` e valida contra a lista de módulos permitidos antes de chegar no controller.
+*   **Front-end:** A `DashboardLayout` deve receber o plano do usuário (via cookie ou fetch) e renderizar o menu lateral **somente com os itens permitidos**. Clicar em um módulo bloqueado (ex: "Clientes" no FREE) deve abrir um modal de upgrade — nunca redirecionar para uma página de erro.
+
+---
+
+## 10. Importação de Clientes via Excel (MVP do Plano STARTER+)
+
+*   **Endpoint:** `POST /charges/import` — aceita upload de arquivo `.xlsx` ou `.csv`.
+*   **Biblioteca:** `exceljs` ou `xlsx` para ler o arquivo no servidor. `multer` para receber o upload.
+*   **Fluxo:**
+    1. Usuário faz upload do arquivo.
+    2. O servidor lê cada linha e, para cada número de telefone:
+        - Verifica se o usuário já existe (Shadow User).
+        - Se não existir, cria um Shadow User (`is_registered = false`).
+        - Cria uma `Charge` com status `PENDING` vinculada ao `creditor_id` do lojista logado.
+    3. Retorna um resumo: `{ success: N, errors: [{ linha: X, motivo: '...' }] }`.
+*   **Arquivo de Exemplo:** A rota `GET /charges/import/template` retorna o download de um arquivo `.xlsx` de exemplo com as colunas obrigatórias: `nome`, `telefone`, `valor`, `data_vencimento`, `descricao`.
+*   **Validações obrigatórias:** Telefone no formato E.164 (com DDI), valor numérico positivo, data futura.
+
+---
+
+## 11. Assinaturas e Cobrança via Asaas (MVP)
+
+O gateway de pagamento oficial para cobranças de assinatura da plataforma RecebeFácil é o **Asaas** (`https://www.asaas.com/`). Para integração, consultar a documentação oficial da API em `https://docs.asaas.com/`.
+
+> ⚠️ Para detalhes completos da implementação, ver o arquivo `payment-gateway.md`.
+
+**Resumo das responsabilidades:**
+*   **Criação de Clientes no Asaas:** Ao criar uma conta, registrar o lojista também como um Customer no Asaas para vincular futuras cobranças.
+*   **Geração de Link de Pagamento:** O plano do lojista é cobrado via link de pagamento do Asaas. O usuário pode pagar via Pix, boleto ou cartão.
+*   **Assinatura Mensal / Anual:** Suportamos ambas as periodicidades. A renovação é automática via Asaas.
+*   **Webhook de Confirmação:** O Asaas envia um `POST` para `/webhooks/asaas` quando um pagamento é confirmado. A assinatura do cabeçalho (`asaas-signature`) DEVE ser validada. Ver `security-guidelines.md` Seção 5.
+*   **Atualização de Plano:** Ao receber o evento `PAYMENT_CONFIRMED` no webhook, o sistema atualiza `Subscription.status = ACTIVE` e `Subscription.plan_type` no banco.
+
+---
+
+## 12. Próximos Passos (Ação)
+
+1. **Módulo de Cobrança (Back-End):** Desenvolver o `ChargeModule` para permitir a criação das primeiras cobranças, aplicando as regras de IDOR e Shadow User.
+2. **Plan Gating:** Implementar o `PlanGuard` no back-end e a renderização condicional do menu no `DashboardLayout`.
+3. **Importação via Excel:** Implementar o endpoint `POST /charges/import` com `multer` + `exceljs`.
+4. **Integração Asaas:** Implementar o `SubscriptionModule` com criação de cliente, link de pagamento e webhook. Ver `payment-gateway.md`.
+

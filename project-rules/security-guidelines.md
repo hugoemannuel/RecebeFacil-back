@@ -73,3 +73,25 @@ Ao integrar com APIs externas de WhatsApp (Z-API, Evolution) ou Pagamentos (Stri
 *   **Vazamento de Stack Trace:** Em ambiente de produção, a aplicação DEVE rodar com `NODE_ENV=production`. O NestJS oculta a Stack Trace de erros 500 por padrão, não altere isso. O cliente nunca pode ver o erro interno do banco de dados na resposta HTTP.
 *   **O que NUNCA logar:** Senhas, Tokens JWT, chaves de API, textos inteiros de WhatsApp, ou cartões de crédito. Mascare esses dados antes de enviar para ferramentas de log (DataDog, CloudWatch).
 *   **Auditoria de Mudanças Críticas:** Mudanças de plano, deleção de usuários ou marcação de "Pago" manualmente devem, idealmente, deixar um rastro. Crie logs que identifiquem `QUEM (user_id)` fez a ação, `O QUE (action)` e `QUANDO (timestamp)`.
+
+---
+
+## 7. Segurança Específica: Gateway de Pagamento (Asaas) e Cartões de Crédito
+
+Esta seção complementa a Seção 5 com regras específicas para a integração com o Asaas e dados de pagamento.
+
+*   **PCI DSS — Proibição Absoluta de Armazenar Dados de Cartão:**
+    O RecebeFácil **jamais** deve armazenar número de cartão, CVV ou data de validade em seus servidores ou logs. Todo o processamento de cartão é delegado ao Asaas, que é certificado PCI DSS. Utilize o **Asaas.js** para tokenização no browser se necessário.
+
+*   **Webhook do Asaas — Validação de Origem:**
+    O endpoint `POST /webhooks/asaas` é público (sem JWT). Por isso, **obrigatoriamente** deve validar o token de acesso enviado no header `asaas-access-token` contra a variável de ambiente `ASAAS_WEBHOOK_SECRET`. Qualquer chamada sem o token válido deve retornar `401 UNAUTHORIZED` sem processar nenhuma ação.
+
+*   **Idempotência em Webhooks de Pagamento:**
+    Antes de atualizar o status de uma assinatura para `ACTIVE`, verificar se o `asaas_payment_id` já foi processado anteriormente. Webhooks são retransmitidos em caso de falha — nunca processar o mesmo evento de pagamento mais de uma vez.
+
+*   **Chave de API do Asaas:**
+    A `ASAAS_API_KEY` é tão sensível quanto uma senha de banco de dados. Ela NUNCA deve estar no código-fonte, ser commitada no git ou exibida em logs. Usar exclusivamente variáveis de ambiente.
+
+*   **Dados de Sub-Conta (Asaas Connect — Feature Futura):**
+    Quando a feature de split de pagamentos for implementada, o `asaas_account_key` do lojista será extremamente sensível. Deve ser criptografado em repouso no banco de dados (AES-256) e jamais retornado em endpoints de leitura.
+

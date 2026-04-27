@@ -26,6 +26,19 @@ enum SubStatus {
   PAST_DUE
 }
 
+enum SubPeriod {
+  MONTHLY
+  YEARLY
+}
+
+enum SubModule {
+  HOME
+  CHARGES
+  CLIENTS
+  REPORTS
+  EXCEL_IMPORT
+}
+
 enum ChargeStatus {
   PENDING
   PAID
@@ -47,12 +60,13 @@ enum Frequency {
 }
 
 model User {
-  id            String  @id @default(uuid())
-  phone         String  @unique
-  name          String
-  email         String? @unique
-  password_hash String?
-  is_registered Boolean @default(false)
+  id                String  @id @default(uuid())
+  phone             String  @unique
+  name              String
+  email             String? @unique
+  password_hash     String?
+  is_registered     Boolean @default(false)
+  asaas_customer_id String? // ID do cliente no Asaas (para cobranças de plano)
 
   charges_as_creditor   Charge[]                @relation("CreditorCharges")
   charges_as_debtor     Charge[]                @relation("DebtorCharges")
@@ -71,8 +85,10 @@ model Subscription {
   user                 User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
   plan_type            PlanType
   status               SubStatus
+  period               SubPeriod @default(MONTHLY)
   current_period_start DateTime
   current_period_end   DateTime
+  asaas_payment_id     String?   // ID da última cobrança/assinatura no Asaas (idempotência)
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

@@ -8,6 +8,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 import { DashboardModule } from './dashboard/dashboard.module';
+import { SubscriptionModule } from './subscription/subscription.module';
 
 @Module({
   imports: [
@@ -18,7 +19,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
     PrismaModule, 
     UsersModule, 
     AuthModule,
-    DashboardModule
+    DashboardModule,
+    SubscriptionModule
   ],
   controllers: [AppController],
   providers: [

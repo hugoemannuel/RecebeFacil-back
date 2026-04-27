@@ -161,6 +161,11 @@ export class ChargesService {
   }
 
   async bulkCancel(userId: string, chargeIds: string[]) {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+    if (!subscription || ['FREE', 'STARTER'].includes(subscription.plan_type)) {
+      throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
+    }
+
     const charges = await this.prisma.charge.findMany({
       where: { id: { in: chargeIds }, creditor_id: userId }
     });
@@ -183,6 +188,11 @@ export class ChargesService {
   }
 
   async bulkRemind(userId: string, chargeIds: string[]) {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+    if (!subscription || ['FREE', 'STARTER'].includes(subscription.plan_type)) {
+      throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
+    }
+
     // Just simulating a bulk remind for now
     const charges = await this.prisma.charge.findMany({
       where: { id: { in: chargeIds }, creditor_id: userId }

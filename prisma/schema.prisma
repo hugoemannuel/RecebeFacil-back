@@ -1,5 +1,7 @@
 // Este é o schema Prisma do RecebeFácil
 // Baseado na documentação de Backend e Security Guidelines
+// REGRA: A tabela User contém APENAS dados de identidade/auth.
+// Dados de negócio, PIX, WhatsApp e integrações ficam em tabelas separadas.
 
 generator client {
   provider = "prisma-client-js"
@@ -59,25 +61,125 @@ enum Frequency {
   YEARLY
 }
 
-model User {
-  id                String  @id @default(uuid())
-  phone             String  @unique
-  name              String
-  email             String? @unique
-  password_hash     String?
-  is_registered     Boolean @default(false)
-  asaas_customer_id String? // ID do cliente no Asaas (para cobranças de plano)
+enum PixKeyType {
+  CPF
+  CNPJ
+  PHONE
+  EMAIL
+  EVP
+}
 
+enum MessageTrigger {
+  MANUAL
+  BEFORE_DUE
+  ON_DUE
+  OVERDUE
+}
+
+// ==========================================
+// IDENTIDADE & AUTENTICAÇÃO
+// User contém APENAS dados de auth. Regra de Ouro do projeto.
+// ==========================================
+
+model User {
+  id            String  @id @default(uuid())
+  phone         String  @unique // DDI+DDD+Num (Ex: 5511999999999)
+  name          String
+  email         String? @unique
+  password_hash String?
+  is_registered Boolean @default(false) // false = Shadow User
+
+  // Relacionamentos de cobrança
   charges_as_creditor   Charge[]                @relation("CreditorCharges")
   charges_as_debtor     Charge[]                @relation("DebtorCharges")
   recurring_as_creditor RecurringCharge[]       @relation("CreditorRecurring")
   recurring_as_debtor   RecurringChargeDebtor[] @relation("DebtorRecurringRecord")
-  subscription          Subscription?
-  audit_logs            AuditLog[]              @relation("UserAuditLogs")
+
+  // Perfis e configurações (tabelas separadas — segurança por contenção)
+  creditor_profile  CreditorProfile?
+  subscription      Subscription?
+  integration_config IntegrationConfig?
+  audit_logs        AuditLog[]          @relation("UserAuditLogs")
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+// ==========================================
+// PERFIL DO LOJISTA (dados de negócio)
+// Separado do User para não vazar dados comerciais junto com auth.
+// ==========================================
+
+model CreditorProfile {
+  id              String  @id @default(uuid())
+  user_id         String  @unique
+  user            User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Dados comerciais
+  business_name   String?              // Nome da empresa/profissional
+  document        String?              // CPF ou CNPJ (opcional no cadastro)
+
+  // Configurações PIX
+  pix_key         String?              // Chave PIX
+  pix_key_type    PixKeyType?          // Tipo da chave
+  pix_merchant_name String?            @db.VarChar(25) // Máx 25 chars (protocolo PIX)
+  pix_qr_code_url   String?            // URL pública do QR Code gerado
+
+  // Templates de mensagem (relação 1:N)
+  message_templates MessageTemplate[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// ==========================================
+// TEMPLATES DE MENSAGEM WHATSAPP
+// Separado para permitir múltiplos templates por lojista.
+// ==========================================
+
+model MessageTemplate {
+  id                  String         @id @default(uuid())
+  creditor_profile_id String
+  creditor_profile    CreditorProfile @relation(fields: [creditor_profile_id], references: [id], onDelete: Cascade)
+
+  name     String        // Ex: "Cobrança Inicial", "Lembrete Amigável"
+  trigger  MessageTrigger
+  body     String        // Corpo da mensagem com variáveis {{nome}}, {{valor}}, etc.
+  is_default Boolean     @default(false) // Template padrão para o gatilho
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// ==========================================
+// CONFIGURAÇÕES DE INTEGRAÇÕES DE TERCEIROS
+// Credenciais de APIs externas nunca ficam no User.
+// ==========================================
+
+model IntegrationConfig {
+  id      String @id @default(uuid())
+  user_id String @unique
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Z-API (WhatsApp)
+  zapi_instance_id    String? // ID da instância Z-API do lojista (futuro: número próprio)
+  zapi_instance_token String? // Token da instância Z-API
+  allows_automation   Boolean @default(true) // Opt-out de automações (se devedor enviou PARAR)
+
+  // Asaas (Gateway de pagamento para ASSINATURA do lojista)
+  asaas_customer_id   String? // ID do lojista como Customer no Asaas
+
+  // Futuro: Asaas Connect (split de pagamentos)
+  asaas_wallet_id     String? // Sub-conta do lojista no Asaas Connect
+  asaas_account_key   String? // Chave de acesso da sub-conta (criptografar em repouso)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// ==========================================
+// ASSINATURA & PLANO
+// ==========================================
 
 model Subscription {
   id                   String    @id @default(uuid())
@@ -88,21 +190,31 @@ model Subscription {
   period               SubPeriod @default(MONTHLY)
   current_period_start DateTime
   current_period_end   DateTime
-  asaas_payment_id     String?   // ID da última cobrança/assinatura no Asaas (idempotência)
+  asaas_payment_id     String?   // ID da última cobrança no Asaas (idempotência)
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
 
+// ==========================================
+// COBRANÇAS
+// ==========================================
+
 model Charge {
-  id           String       @id @default(uuid())
-  creditor_id  String
-  debtor_id    String
-  amount       Int
-  description  String
-  due_date     DateTime
-  status       ChargeStatus @default(PENDING)
-  payment_date DateTime?
+  id             String       @id @default(uuid())
+  creditor_id    String
+  debtor_id      String
+  amount         Int          // Em centavos (Ex: R$ 50,00 = 5000)
+  description    String
+  due_date       DateTime
+  status         ChargeStatus @default(PENDING)
+  payment_date   DateTime?
+  custom_message String?      // Mensagem customizada para este envio específico
+
+  // Flags futuras para intermediação de pagamento (split Asaas)
+  is_intermediated Boolean  @default(false)
+  platform_fee_pct Decimal? // % de taxa (padrão: 1.00)
+  asaas_payment_id String?  // ID da cobrança no Asaas (quando intermediada)
 
   creditor User             @relation("CreditorCharges", fields: [creditor_id], references: [id], onDelete: Cascade)
   debtor   User             @relation("DebtorCharges", fields: [debtor_id], references: [id], onDelete: Cascade)
@@ -121,8 +233,14 @@ model MessageHistory {
   charge       Charge      @relation(fields: [charge_id], references: [id], onDelete: Cascade)
   trigger_type TriggerType
   sent_at      DateTime    @default(now())
-  status       String
+  status       String      // SENT, FAILED
+  zapi_message_id String?  // ID retornado pela Z-API para rastreamento
+  error_details   String?  // Detalhes do erro em caso de FAILED (nunca expor na API)
 }
+
+// ==========================================
+// COBRANÇAS RECORRENTES
+// ==========================================
 
 model RecurringCharge {
   id                   String    @id @default(uuid())
@@ -150,13 +268,17 @@ model RecurringChargeDebtor {
   debtor           User            @relation("DebtorRecurringRecord", fields: [debtor_id], references: [id], onDelete: Cascade)
 }
 
+// ==========================================
+// AUDITORIA
+// ==========================================
+
 model AuditLog {
   id         String  @id @default(uuid())
   user_id    String?
-  action     String
-  entity     String
-  entity_id  String
-  details    Json?
+  action     String  // Ex: CHARGE_SENT, SUBSCRIPTION_ACTIVATED, PIX_CONFIG_UPDATED
+  entity     String  // Nome da tabela afetada
+  entity_id  String  // ID do registro afetado
+  details    Json?   // Dados adicionais (NUNCA incluir senhas, tokens, cartões)
   ip_address String?
 
   user User? @relation("UserAuditLogs", fields: [user_id], references: [id], onDelete: SetNull)

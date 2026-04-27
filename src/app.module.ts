@@ -7,6 +7,8 @@ import { AuthModule } from './auth/auth.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
+import { DashboardModule } from './dashboard/dashboard.module';
+
 @Module({
   imports: [
     ThrottlerModule.forRoot([{
@@ -15,7 +17,8 @@ import { APP_GUARD } from '@nestjs/core';
     }]),
     PrismaModule, 
     UsersModule, 
-    AuthModule
+    AuthModule,
+    DashboardModule
   ],
   controllers: [AppController],
   providers: [

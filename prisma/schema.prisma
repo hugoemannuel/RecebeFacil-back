@@ -1,19 +1,149 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Este é o schema Prisma do RecebeFácil
+// Baseado na documentação de Backend e Security Guidelines
 
 generator client {
   provider = "prisma-client-js"
-  output   = "./generated"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum PlanType {
+  FREE
+  STARTER
+  PRO
+  UNLIMITED
+}
+
+enum SubStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+}
+
+enum ChargeStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELED
+}
+
+enum TriggerType {
+  MANUAL
+  AUTO_REMINDER_BEFORE
+  AUTO_REMINDER_DUE
+  AUTO_REMINDER_OVERDUE
+}
+
+enum Frequency {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
 model User {
-  id    Int    @id @default(autoincrement())
-  name  String
-  email String @unique
+  id            String  @id @default(uuid())
+  phone         String  @unique
+  name          String
+  email         String? @unique
+  password_hash String?
+  is_registered Boolean @default(false)
+
+  charges_as_creditor   Charge[]                @relation("CreditorCharges")
+  charges_as_debtor     Charge[]                @relation("DebtorCharges")
+  recurring_as_creditor RecurringCharge[]       @relation("CreditorRecurring")
+  recurring_as_debtor   RecurringChargeDebtor[] @relation("DebtorRecurringRecord")
+  subscription          Subscription?
+  audit_logs            AuditLog[]              @relation("UserAuditLogs")
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model Subscription {
+  id                   String    @id @default(uuid())
+  user_id              String    @unique
+  user                 User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  plan_type            PlanType
+  status               SubStatus
+  current_period_start DateTime
+  current_period_end   DateTime
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model Charge {
+  id           String       @id @default(uuid())
+  creditor_id  String
+  debtor_id    String
+  amount       Int
+  description  String
+  due_date     DateTime
+  status       ChargeStatus @default(PENDING)
+  payment_date DateTime?
+
+  creditor User             @relation("CreditorCharges", fields: [creditor_id], references: [id], onDelete: Cascade)
+  debtor   User             @relation("DebtorCharges", fields: [debtor_id], references: [id], onDelete: Cascade)
+  messages MessageHistory[]
+
+  recurring_charge_id String?
+  recurring_charge    RecurringCharge? @relation(fields: [recurring_charge_id], references: [id], onDelete: SetNull)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model MessageHistory {
+  id           String      @id @default(uuid())
+  charge_id    String
+  charge       Charge      @relation(fields: [charge_id], references: [id], onDelete: Cascade)
+  trigger_type TriggerType
+  sent_at      DateTime    @default(now())
+  status       String
+}
+
+model RecurringCharge {
+  id                   String    @id @default(uuid())
+  creditor_id          String
+  amount               Int
+  description          String
+  frequency            Frequency
+  next_generation_date DateTime
+  active               Boolean   @default(true)
+
+  creditor User                    @relation("CreditorRecurring", fields: [creditor_id], references: [id], onDelete: Cascade)
+  debtors  RecurringChargeDebtor[]
+  charges  Charge[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model RecurringChargeDebtor {
+  id                  String @id @default(uuid())
+  recurring_charge_id String
+  debtor_id           String
+
+  recurring_charge RecurringCharge @relation(fields: [recurring_charge_id], references: [id], onDelete: Cascade)
+  debtor           User            @relation("DebtorRecurringRecord", fields: [debtor_id], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String  @id @default(uuid())
+  user_id    String?
+  action     String
+  entity     String
+  entity_id  String
+  details    Json?
+  ip_address String?
+
+  user User? @relation("UserAuditLogs", fields: [user_id], references: [id], onDelete: SetNull)
+
+  created_at DateTime @default(now())
 }

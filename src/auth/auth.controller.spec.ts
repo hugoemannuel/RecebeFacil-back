@@ -30,16 +30,16 @@ describe('AuthController', () => {
   });
 
   it('should call authService.login on login', async () => {
-    mockAuthService.login.mockResolvedValueOnce({ token: 'abc' });
+    mockAuthService.login.mockResolvedValueOnce({ access_token: 'abc' });
     const result = await controller.login({ email: 'e', password: 'p' });
     expect(authService.login).toHaveBeenCalled();
-    expect(result.token).toBe('abc');
+    expect(result.access_token).toBe('abc');
   });
 
   it('should call authService.register on register', async () => {
-    mockAuthService.register.mockResolvedValueOnce({ token: 'xyz' });
+    mockAuthService.register.mockResolvedValueOnce({ access_token: 'xyz' });
     const result = await controller.register({ name: 'N', email: 'E', phone: 'P', password: 'P' });
     expect(authService.register).toHaveBeenCalled();
-    expect(result.token).toBe('xyz');
+    expect(result.access_token).toBe('xyz');
   });
 });

@@ -7,6 +7,28 @@ import { PixKeyType } from '@prisma/client';
 export class ChargesService {
   constructor(private prisma: PrismaService) {}
 
+  async findAll(userId: string) {
+    const charges = await this.prisma.charge.findMany({
+      where: { creditor_id: userId },
+      include: {
+        debtor: true,
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+    });
+
+    return charges.map(charge => ({
+      id: charge.id,
+      debtorName: charge.debtor.name,
+      phone: charge.debtor.phone,
+      amount: charge.amount,
+      dueDate: charge.due_date.toISOString().split('T')[0],
+      status: charge.status,
+      automationEnabled: false,
+    }));
+  }
+
   async createCharge(userId: string, dto: CreateChargeDto) {
     // 1. Verify Plan & Limit
     const subscription = await this.prisma.subscription.findUnique({

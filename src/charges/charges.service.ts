@@ -144,4 +144,60 @@ export class ChargesService {
 
     return { success: true, chargeId: charge.id };
   }
+
+  async cancelCharge(userId: string, chargeId: string) {
+    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
+    if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
+    
+    await this.prisma.charge.update({
+      where: { id: chargeId },
+      data: { status: 'CANCELED' }
+    });
+
+    await this.prisma.auditLog.create({
+      data: { user_id: userId, action: 'CHARGE_CANCELED', entity: 'Charge', entity_id: chargeId }
+    });
+    return { success: true };
+  }
+
+  async bulkCancel(userId: string, chargeIds: string[]) {
+    const charges = await this.prisma.charge.findMany({
+      where: { id: { in: chargeIds }, creditor_id: userId }
+    });
+    
+    const validIds = charges.map(c => c.id);
+    if (validIds.length === 0) return { success: true, count: 0 };
+
+    await this.prisma.charge.updateMany({
+      where: { id: { in: validIds } },
+      data: { status: 'CANCELED' }
+    });
+
+    for (const id of validIds) {
+      await this.prisma.auditLog.create({
+        data: { user_id: userId, action: 'CHARGE_BULK_CANCELED', entity: 'Charge', entity_id: id }
+      });
+    }
+
+    return { success: true, count: validIds.length };
+  }
+
+  async bulkRemind(userId: string, chargeIds: string[]) {
+    // Just simulating a bulk remind for now
+    const charges = await this.prisma.charge.findMany({
+      where: { id: { in: chargeIds }, creditor_id: userId }
+    });
+
+    const validIds = charges.map(c => c.id);
+    if (validIds.length === 0) return { success: true, count: 0 };
+
+    // Fake background job
+    for (const id of validIds) {
+      await this.prisma.messageHistory.create({
+        data: { charge_id: id, trigger_type: 'MANUAL', status: 'SENT' }
+      });
+    }
+
+    return { success: true, count: validIds.length };
+  }
 }

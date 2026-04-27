@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, UseGuards, Request, Query } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -8,8 +8,9 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   @Get('metrics')
-  async getMetrics(@Request() req) {
-    const metrics = await this.dashboardService.getMetrics(req.user.id);
+  async getMetrics(@Request() req, @Query('period') period?: string, @Query('status') status?: string) {
+    const validStatus = status && ['PENDING', 'PAID', 'OVERDUE', 'CANCELED'].includes(status) ? status : undefined;
+    const metrics = await this.dashboardService.getMetrics(req.user.id, period, validStatus);
     return { ...metrics, user: { name: req.user.name } };
   }
 }

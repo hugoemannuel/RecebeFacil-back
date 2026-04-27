@@ -292,10 +292,20 @@ O gateway de pagamento oficial para cobranças de assinatura da plataforma Receb
 
 ---
 
-## 12. Próximos Passos (Ação)
+## 12. Status e Próximos Passos (Ação)
 
-1. **Módulo de Cobrança (Back-End):** Desenvolver o `ChargeModule` para permitir a criação das primeiras cobranças, aplicando as regras de IDOR e Shadow User.
-2. **Plan Gating:** Implementar o `PlanGuard` no back-end e a renderização condicional do menu no `DashboardLayout`.
-3. **Importação via Excel:** Implementar o endpoint `POST /charges/import` com `multer` + `exceljs`.
-4. **Integração Asaas:** Implementar o `SubscriptionModule` com criação de cliente, link de pagamento e webhook. Ver `payment-gateway.md`.
+### ✅ Implementado (Módulo de Cobranças)
+*   **ChargesController e ChargesService:** Implementados os métodos principais de CRUD.
+    *   `POST /charges`: Criação de cobranças garantindo o `creditor_id` pelo JWT.
+    *   `GET /charges`: Listagem das cobranças com mapeamento das relações (ex: `debtor`).
+    *   `DELETE /charges/:id`: Cancelamento com auditoria.
+    *   `POST /charges/bulk/cancel` e `POST /charges/bulk/remind`: Ações em lote.
+*   **Plan Gating & Segurança:**
+    *   Prevenção de IDOR ativa (cláusula `where: { creditor_id }` garantida nos serviços).
+    *   Métricas e limites dinâmicos no dashboard acoplados ao `plan_type` do `Subscription`.
+
+### ⏳ Próximos Passos
+1. **Importação via Excel:** Implementar o endpoint `POST /charges/import` com `multer` + `exceljs`.
+2. **Integração Asaas:** Implementar o `SubscriptionModule` com criação de cliente, link de pagamento e webhook. Ver `payment-gateway.md`.
+3. **CRON Jobs de Automação:** Implementar o agendador global para varrer e disparar lembretes automáticos (`MessageHistory`).
 

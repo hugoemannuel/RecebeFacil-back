@@ -29,6 +29,24 @@ export class ChargesService {
     }));
   }
 
+  async findOne(userId: string, chargeId: string) {
+    const charge = await this.prisma.charge.findUnique({
+      where: { id: chargeId },
+      include: {
+        debtor: true,
+        messages: {
+          orderBy: { sent_at: 'desc' }
+        }
+      }
+    });
+
+    if (!charge || charge.creditor_id !== userId) {
+      throw new ForbiddenException('Charge not found or access denied');
+    }
+
+    return charge;
+  }
+
   async createCharge(userId: string, dto: CreateChargeDto) {
     // 1. Verify Plan & Limit
     const subscription = await this.prisma.subscription.findUnique({

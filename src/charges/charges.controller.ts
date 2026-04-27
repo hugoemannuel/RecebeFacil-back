@@ -13,6 +13,11 @@ export class ChargesController {
     return this.chargesService.findAll(req.user.id);
   }
 
+  @Get(':id')
+  async findOne(@Request() req, @Param('id') id: string) {
+    return this.chargesService.findOne(req.user.id, id);
+  }
+
   @Post()
   async createCharge(@Request() req, @Body() createChargeDto: CreateChargeDto) {
     return this.chargesService.createCharge(req.user.id, createChargeDto);

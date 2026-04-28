@@ -269,6 +269,17 @@ model RecurringChargeDebtor {
 }
 
 // ==========================================
+// DEMO AO VIVO
+// Controle de uma tentativa por IP (hash SHA-256 — fora do escopo LGPD).
+// ==========================================
+
+model DemoAttempt {
+  id        String   @id @default(uuid())
+  ipHash    String   @unique
+  createdAt DateTime @default(now())
+}
+
+// ==========================================
 // AUDITORIA
 // ==========================================
 

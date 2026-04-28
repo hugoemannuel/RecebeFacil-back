@@ -10,6 +10,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { SubscriptionModule } from './subscription/subscription.module';
 import { ChargesModule } from './charges/charges.module';
+import { DemoModule } from './demo/demo.module';
 
 @Module({
   imports: [
@@ -22,7 +23,8 @@ import { ChargesModule } from './charges/charges.module';
     AuthModule,
     DashboardModule,
     SubscriptionModule,
-    ChargesModule
+    ChargesModule,
+    DemoModule,
   ],
   controllers: [AppController],
   providers: [

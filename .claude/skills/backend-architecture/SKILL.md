@@ -34,7 +34,9 @@ src/
     subscription.service.ts ← getUserPlan, activatePlan, downgradeToFree
 
   users/
+    users.controller.ts  ← GET/PATCH/DELETE /users/me (perfil, senha, exclusão LGPD)
     users.service.ts     ← findByEmail, findByPhone, findById, registerUser (shadow user)
+                            getProfile, updateProfile, updatePassword, deleteAccount
 
   prisma/
     prisma.service.ts    ← extends PrismaClient, onModuleInit
@@ -102,7 +104,7 @@ await this.prisma.auditLog.create({
 });
 ```
 
-Actions auditadas: `CHARGE_CREATED`, `CHARGE_CANCELED`, `CHARGE_BULK_CANCELED`, `PIX_CONFIG_UPDATED`, `SUBSCRIPTION_ACTIVATED`, `SUBSCRIPTION_DOWNGRADED`, `USER_REGISTERED_NEW`, `USER_REGISTERED_FROM_SHADOW`
+Actions auditadas: `CHARGE_CREATED`, `CHARGE_CANCELED`, `CHARGE_BULK_CANCELED`, `PIX_CONFIG_UPDATED`, `SUBSCRIPTION_ACTIVATED`, `SUBSCRIPTION_DOWNGRADED`, `USER_REGISTERED_NEW`, `USER_REGISTERED_FROM_SHADOW`, `PASSWORD_CHANGED`, `ACCOUNT_DELETED`
 
 ## Rate Limiting (AppModule)
 

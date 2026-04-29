@@ -13,6 +13,9 @@ describe('SubscriptionService', () => {
       upsert: jest.fn(),
       update: jest.fn(),
     },
+    charge: {
+      count: jest.fn(),
+    },
     auditLog: {
       create: jest.fn(),
     },
@@ -79,13 +82,15 @@ describe('SubscriptionService', () => {
   // getSubscriptionStatus
   // ─────────────────────────────────────────────────────────────
   describe('getSubscriptionStatus', () => {
-    it('deve retornar status NONE e módulos FREE quando sem assinatura', async () => {
+    it('deve retornar status NONE, módulos FREE e sentThisMonth quando sem assinatura', async () => {
       mockPrismaService.subscription.findUnique.mockResolvedValueOnce(null);
+      mockPrismaService.charge.count.mockResolvedValueOnce(3);
       const result = await service.getSubscriptionStatus('user-1');
 
       expect(result.plan).toBe(PlanType.FREE);
       expect(result.status).toBe('NONE');
       expect(result.allowed_modules).toEqual(PLAN_MODULES[PlanType.FREE]);
+      expect(result.sentThisMonth).toBe(3);
     });
 
     it('deve retornar módulos do plano STARTER quando ACTIVE', async () => {
@@ -95,6 +100,7 @@ describe('SubscriptionService', () => {
         period: 'MONTHLY',
         current_period_end: new Date('2026-12-31'),
       });
+      mockPrismaService.charge.count.mockResolvedValueOnce(7);
 
       const result = await service.getSubscriptionStatus('user-1');
 
@@ -102,6 +108,7 @@ describe('SubscriptionService', () => {
       expect(result.allowed_modules).toEqual(PLAN_MODULES[PlanType.STARTER]);
       expect(result.allowed_modules).toContain('CLIENTS');
       expect(result.allowed_modules).toContain('EXCEL_IMPORT');
+      expect(result.sentThisMonth).toBe(7);
     });
 
     it('deve retornar módulos FREE mesmo com plano PRO se CANCELED', async () => {
@@ -111,11 +118,13 @@ describe('SubscriptionService', () => {
         period: 'YEARLY',
         current_period_end: new Date('2025-01-01'),
       });
+      mockPrismaService.charge.count.mockResolvedValueOnce(0);
 
       const result = await service.getSubscriptionStatus('user-1');
       expect(result.plan).toBe(PlanType.FREE);
       expect(result.allowed_modules).toEqual(PLAN_MODULES[PlanType.FREE]);
       expect(result.allowed_modules).not.toContain('CLIENTS');
+      expect(result.sentThisMonth).toBe(0);
     });
   });
 

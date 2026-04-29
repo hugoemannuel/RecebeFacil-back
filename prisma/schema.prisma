@@ -192,6 +192,10 @@ model Subscription {
   current_period_end   DateTime
   asaas_payment_id     String?   // ID da última cobrança no Asaas (idempotência)
 
+  // Grace period de falha de pagamento (3 dias antes de cancelar)
+  payment_failed_at      DateTime? // Quando o pagamento falhou (PAYMENT_OVERDUE do Asaas)
+  payment_failure_reason String?   // Motivo: 'PAYMENT_OVERDUE', 'PAYMENT_DELETED', etc.
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }

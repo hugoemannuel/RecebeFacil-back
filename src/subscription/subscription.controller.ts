@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards, Request } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { SubscriptionService } from './subscription.service';
 
@@ -7,13 +7,23 @@ import { SubscriptionService } from './subscription.service';
 export class SubscriptionController {
   constructor(private readonly subscriptionService: SubscriptionService) {}
 
-  /**
-   * GET /subscription/status
-   * Retorna o plano ativo do usuário + módulos permitidos.
-   * Usado pelo front-end para montar o menu e controlar o acesso.
-   */
   @Get('status')
   async getStatus(@Request() req) {
+    return this.subscriptionService.getSubscriptionStatus(req.user.id);
+  }
+
+  @Post('cancel')
+  async cancel(@Request() req) {
+    return this.subscriptionService.cancelSubscription(req.user.id);
+  }
+
+  /**
+   * POST /subscription/retry-payment
+   * Stub para futura integração com Asaas — retentar cobrança do cartão.
+   * Implementar quando Asaas Connect estiver ativo.
+   */
+  @Post('retry-payment')
+  async retryPayment(@Request() req) {
     return this.subscriptionService.getSubscriptionStatus(req.user.id);
   }
 }

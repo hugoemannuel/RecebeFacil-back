@@ -1,6 +1,14 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { createHmac } from 'crypto';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from '../auth/dto/register.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdatePasswordDto } from './dto/update-password.dto';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -17,6 +25,85 @@ export class UsersService {
 
   async findById(id: string) {
     return this.prisma.user.findUnique({ where: { id } });
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, phone: true },
+    });
+    if (!user) throw new NotFoundException();
+    return user;
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (existing && existing.id !== userId) {
+      throw new ConflictException('Não foi possível atualizar o perfil. Verifique os dados informados.');
+    }
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { name: dto.name, email: dto.email },
+      select: { id: true, name: true, email: true, phone: true },
+    });
+  }
+
+  async updatePassword(userId: string, dto: UpdatePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.password_hash) {
+      throw new UnauthorizedException('Credenciais inválidas.');
+    }
+
+    const isMatch = await bcrypt.compare(dto.current_password, user.password_hash);
+    if (!isMatch) {
+      throw new UnauthorizedException('Credenciais inválidas.');
+    }
+
+    const password_hash = await bcrypt.hash(dto.new_password, 12);
+
+    await this.prisma.user.update({ where: { id: userId }, data: { password_hash } });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'PASSWORD_CHANGED',
+        entity: 'User',
+        entity_id: userId,
+      },
+    });
+
+    return { message: 'Senha alterada com sucesso.' };
+  }
+
+  async deleteAccount(userId: string, ipAddress?: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException();
+
+    const salt = process.env.ANON_SALT ?? 'recebefacil_lgpd_anon';
+    const hmac = (value: string) => createHmac('sha256', salt).update(value).digest('hex');
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        name: 'Usuário Deletado',
+        email: user.email ? `${hmac(user.email)}@deleted.invalid` : null,
+        phone: hmac(user.phone),
+        password_hash: null,
+        is_registered: false,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: null,
+        action: 'ACCOUNT_DELETED',
+        entity: 'User',
+        entity_id: userId,
+        details: { reason: 'Self-deletion (LGPD)' },
+        ip_address: ipAddress,
+      },
+    });
   }
 
   async registerUser(dto: RegisterDto) {

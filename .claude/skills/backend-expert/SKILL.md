@@ -34,7 +34,13 @@ src/
 
   subscription/
     subscription.service.ts  ← getUserPlan, activatePlan (upsert), downgradeToFree
-    subscription.controller.ts ← GET /subscription/status
+    subscription.controller.ts ← GET /subscription/status, POST /subscription/checkout, POST /webhooks/asaas
+
+  whatsapp/
+    whatsapp.service.ts  ← ÚNICO ponto de integração Z-API (envio de texto, imagem, botão PIX)
+
+  demo/
+    demo.controller.ts   ← POST /demo/send (endpoint público, sem AuthGuard, para landing page)
 
   users/
     users.service.ts  ← findByEmail, findByPhone, findById, registerUser (shadow user logic)

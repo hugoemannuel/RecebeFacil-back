@@ -30,8 +30,14 @@ src/
   dashboard/             ← GET /dashboard (métricas, gráficos)
     dashboard.service.ts ← Promise.all paralelo, sem N+1
 
-  subscription/          ← GET /subscription/status, webhook Asaas
+  subscription/          ← GET /subscription/status, POST /subscription/checkout, POST /webhooks/asaas
     subscription.service.ts ← getUserPlan, activatePlan, downgradeToFree
+
+  whatsapp/              ← ÚNICO ponto de integração Z-API
+    whatsapp.service.ts  ← send text, image, PIX button; nunca chamar Z-API fora daqui
+
+  demo/                  ← Endpoint público (sem AuthGuard) para demo da landing page
+    demo.controller.ts   ← POST /demo/send
 
   users/
     users.controller.ts  ← GET/PATCH/DELETE /users/me (perfil, senha, exclusão LGPD)

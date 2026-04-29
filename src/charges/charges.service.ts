@@ -12,6 +12,7 @@ export class ChargesService {
       where: { creditor_id: userId },
       include: {
         debtor: true,
+        recurring_charge: true,
       },
       orderBy: {
         created_at: 'desc',
@@ -25,6 +26,7 @@ export class ChargesService {
       amount: charge.amount,
       dueDate: charge.due_date.toISOString().split('T')[0],
       status: charge.status,
+      recurrence: charge.recurring_charge?.frequency ?? 'ONCE',
       automationEnabled: false,
     }));
   }

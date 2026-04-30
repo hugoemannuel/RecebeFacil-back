@@ -1,11 +1,15 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { PixKeyType } from '@prisma/client';
 
 @Injectable()
 export class ChargesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private clientsService: ClientsService,
+  ) {}
 
   async findAll(userId: string) {
     const charges = await this.prisma.charge.findMany({
@@ -128,7 +132,27 @@ export class ChargesService {
       });
     }
 
-    // 4. Create Charge
+    // 4. Create RecurringCharge (if recurring) + Charge
+    let recurringChargeId: string | null = null;
+
+    if (dto.recurrence !== 'ONCE') {
+      const dueDate = new Date(dto.due_date);
+      const nextGenerationDate = this.calcNextDate(dueDate, dto.recurrence);
+
+      const recurringCharge = await this.prisma.recurringCharge.create({
+        data: {
+          creditor_id: userId,
+          amount: dto.amount,
+          description: dto.description,
+          frequency: dto.recurrence as any,
+          next_generation_date: nextGenerationDate,
+          active: true,
+          debtors: { create: { debtor_id: debtor.id } },
+        },
+      });
+      recurringChargeId = recurringCharge.id;
+    }
+
     const charge = await this.prisma.charge.create({
       data: {
         creditor_id: userId,
@@ -138,6 +162,7 @@ export class ChargesService {
         due_date: new Date(dto.due_date),
         custom_message: dto.custom_message,
         status: 'PENDING',
+        recurring_charge_id: recurringChargeId,
       },
     });
 
@@ -158,6 +183,9 @@ export class ChargesService {
         entity_id: charge.id,
       }
     });
+
+    // Mantém a lista de clientes sincronizada
+    await this.clientsService.upsertFromCharge(userId, debtor.id);
 
     // Em um sistema real, aqui chamaria um serviço em background/filas (Ex: BullMQ)
     // para disparar a API da Z-API caso o plano permita e o status seja PENDING
@@ -205,6 +233,14 @@ export class ChargesService {
     }
 
     return { success: true, count: validIds.length };
+  }
+
+  private calcNextDate(from: Date, recurrence: string): Date {
+    const d = new Date(from);
+    if (recurrence === 'WEEKLY') d.setDate(d.getDate() + 7);
+    else if (recurrence === 'MONTHLY') d.setMonth(d.getMonth() + 1);
+    else if (recurrence === 'YEARLY') d.setFullYear(d.getFullYear() + 1);
+    return d;
   }
 
   async bulkRemind(userId: string, chargeIds: string[]) {

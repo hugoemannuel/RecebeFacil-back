@@ -95,6 +95,10 @@ model User {
   recurring_as_creditor RecurringCharge[]       @relation("CreditorRecurring")
   recurring_as_debtor   RecurringChargeDebtor[] @relation("DebtorRecurringRecord")
 
+  // Clientes vinculados
+  clients_as_creditor Client[] @relation("CreditorClients")
+  clients_as_debtor   Client[] @relation("DebtorClients")
+
   // Perfis e configurações (tabelas separadas — segurança por contenção)
   creditor_profile  CreditorProfile?
   subscription      Subscription?
@@ -270,6 +274,25 @@ model RecurringChargeDebtor {
 
   recurring_charge RecurringCharge @relation(fields: [recurring_charge_id], references: [id], onDelete: Cascade)
   debtor           User            @relation("DebtorRecurringRecord", fields: [debtor_id], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// CLIENTES
+// Vínculo entre credor e devedor com metadados por relação.
+// ==========================================
+
+model Client {
+  id          String   @id @default(uuid())
+  creditor_id String
+  user_id     String
+  notes       String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  creditor User @relation("CreditorClients", fields: [creditor_id], references: [id], onDelete: Cascade)
+  user     User @relation("DebtorClients",   fields: [user_id],     references: [id], onDelete: Cascade)
+
+  @@unique([creditor_id, user_id])
 }
 
 // ==========================================

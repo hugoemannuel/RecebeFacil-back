@@ -10,6 +10,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { SubscriptionModule } from './subscription/subscription.module';
 import { ChargesModule } from './charges/charges.module';
+import { ClientsModule } from './clients/clients.module';
 import { DemoModule } from './demo/demo.module';
 
 @Module({
@@ -24,6 +25,7 @@ import { DemoModule } from './demo/demo.module';
     DashboardModule,
     SubscriptionModule,
     ChargesModule,
+    ClientsModule,
     DemoModule,
   ],
   controllers: [AppController],

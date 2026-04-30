@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ChargesService } from './charges.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
+import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
+import { UpdateChargeStatusDto } from './dto/update-charge-status.dto';
 
 @Controller('charges')
 @UseGuards(AuthGuard('jwt'))
@@ -38,12 +40,38 @@ export class ChargesController {
     return this.chargesService.bulkRemind(req.user.id, body.chargeIds);
   }
 
+  @Delete('permanent/:id')
+  async hardDeleteCharge(@Request() req, @Param('id') id: string) {
+    return this.chargesService.hardDeleteCharge(req.user.id, id);
+  }
+
+  @Delete('recurring/:id')
+  async deleteRecurring(@Request() req, @Param('id') id: string) {
+    return this.chargesService.deleteRecurring(req.user.id, id);
+  }
+
   @Delete(':id')
   async deleteCharge(@Request() req, @Param('id') id: string) {
     return this.chargesService.cancelCharge(req.user.id, id);
   }
+
   @Post('recurring/:id/cancel')
   async cancelRecurring(@Request() req, @Param('id') id: string) {
     return this.chargesService.cancelRecurring(req.user.id, id);
+  }
+
+  @Post('recurring/:id/reactivate')
+  async reactivateRecurring(@Request() req, @Param('id') id: string) {
+    return this.chargesService.reactivateRecurring(req.user.id, id);
+  }
+
+  @Patch(':id/status')
+  async updateStatus(@Request() req, @Param('id') id: string, @Body() dto: UpdateChargeStatusDto) {
+    return this.chargesService.updateChargeStatus(req.user.id, id, dto.status);
+  }
+
+  @Patch('recurring/:id')
+  async updateRecurring(@Request() req, @Param('id') id: string, @Body() dto: UpdateRecurringChargeDto) {
+    return this.chargesService.updateRecurring(req.user.id, id, dto);
   }
 }

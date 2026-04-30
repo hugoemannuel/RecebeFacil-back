@@ -261,6 +261,7 @@ model RecurringCharge {
   frequency            Frequency
   next_generation_date DateTime
   active               Boolean   @default(true)
+  custom_message       String?
 
   creditor User                    @relation("CreditorRecurring", fields: [creditor_id], references: [id], onDelete: Cascade)
   debtors  RecurringChargeDebtor[]

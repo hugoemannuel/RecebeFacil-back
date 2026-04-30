@@ -1,7 +1,8 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
+import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { PixKeyType } from '@prisma/client';
 
 @Injectable()
@@ -31,7 +32,8 @@ export class ChargesService {
       dueDate: charge.due_date.toISOString().split('T')[0],
       status: charge.status,
       recurrence: charge.recurring_charge?.frequency ?? 'ONCE',
-      automationEnabled: false,
+      automationEnabled: !!charge.recurring_charge_id,
+      recurringChargeId: charge.recurring_charge_id ?? null,
     }));
   }
 
@@ -53,7 +55,8 @@ export class ChargesService {
       nextGenerationDate: rule.next_generation_date,
       active: rule.active,
       debtorName: rule.debtors[0]?.debtor.name || 'Vários',
-      totalGenerated: rule._count.charges
+      totalGenerated: rule._count.charges,
+      custom_message: rule.custom_message ?? null,
     }));
   }
 
@@ -215,6 +218,46 @@ export class ChargesService {
     return { success: true, chargeId: charge.id };
   }
 
+  async updateChargeStatus(userId: string, chargeId: string, status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELED') {
+    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
+    if (!charge) throw new NotFoundException('Cobrança não encontrada.');
+    if (charge.creditor_id !== userId) throw new ForbiddenException();
+
+    await this.prisma.charge.update({
+      where: { id: chargeId },
+      data: {
+        status,
+        payment_date: status === 'PAID' ? new Date() : null,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'CHARGE_STATUS_UPDATED',
+        entity: 'Charge',
+        entity_id: chargeId,
+        details: { from: charge.status, to: status },
+      },
+    });
+
+    return { success: true };
+  }
+
+  async hardDeleteCharge(userId: string, chargeId: string) {
+    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
+    if (!charge) throw new NotFoundException('Cobrança não encontrada.');
+    if (charge.creditor_id !== userId) throw new ForbiddenException();
+
+    await this.prisma.charge.delete({ where: { id: chargeId } });
+
+    await this.prisma.auditLog.create({
+      data: { user_id: userId, action: 'CHARGE_DELETED', entity: 'Charge', entity_id: chargeId },
+    });
+
+    return { success: true };
+  }
+
   async cancelCharge(userId: string, chargeId: string) {
     const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
     if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
@@ -292,12 +335,82 @@ export class ChargesService {
   async cancelRecurring(userId: string, ruleId: string) {
     const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
     if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();
- 
+
     await this.prisma.recurringCharge.update({
       where: { id: ruleId },
       data: { active: false }
     });
- 
+
+    return { success: true };
+  }
+
+  async updateRecurring(userId: string, ruleId: string, dto: UpdateRecurringChargeDto) {
+    const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
+    if (!rule) throw new NotFoundException('Regra não encontrada.');
+    if (rule.creditor_id !== userId) throw new ForbiddenException();
+
+    const data: any = {};
+    if (dto.frequency !== undefined) data.frequency = dto.frequency;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.custom_message !== undefined) data.custom_message = dto.custom_message;
+    if (dto.next_generation_date !== undefined) data.next_generation_date = new Date(dto.next_generation_date);
+
+    const updated = await this.prisma.recurringCharge.update({
+      where: { id: ruleId },
+      data,
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'RECURRING_CHARGE_UPDATED',
+        entity: 'RecurringCharge',
+        entity_id: ruleId,
+        details: { ...dto },
+      },
+    });
+
+    return { success: true, data: updated };
+  }
+
+  async deleteRecurring(userId: string, ruleId: string) {
+    const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
+    if (!rule) throw new NotFoundException('Regra não encontrada.');
+    if (rule.creditor_id !== userId) throw new ForbiddenException();
+
+    await this.prisma.recurringCharge.delete({ where: { id: ruleId } });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'RECURRING_CHARGE_DELETED',
+        entity: 'RecurringCharge',
+        entity_id: ruleId,
+      },
+    });
+
+    return { success: true };
+  }
+
+  async reactivateRecurring(userId: string, ruleId: string) {
+    const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
+    if (!rule) throw new NotFoundException('Regra não encontrada.');
+    if (rule.creditor_id !== userId) throw new ForbiddenException();
+
+    await this.prisma.recurringCharge.update({
+      where: { id: ruleId },
+      data: { active: true },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'RECURRING_CHARGE_REACTIVATED',
+        entity: 'RecurringCharge',
+        entity_id: ruleId,
+      },
+    });
+
     return { success: true };
   }
 }

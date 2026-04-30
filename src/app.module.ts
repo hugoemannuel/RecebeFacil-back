@@ -15,9 +15,12 @@ import { ClientsModule } from './clients/clients.module';
 import { DemoModule } from './demo/demo.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { ReportsModule } from './reports/reports.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { AutomationModule } from './automation/automation.module';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([{
       ttl: 60000,
       limit: 100,
@@ -32,6 +35,7 @@ import { ReportsModule } from './reports/reports.module';
     DemoModule,
     ProfilesModule,
     ReportsModule,
+    AutomationModule,
   ],
   controllers: [AppController],
   providers: [

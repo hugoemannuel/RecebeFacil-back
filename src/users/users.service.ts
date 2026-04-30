@@ -30,7 +30,7 @@ export class UsersService {
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true, phone: true },
+      select: { id: true, name: true, email: true, phone: true, avatar_url: true },
     });
     if (!user) throw new NotFoundException();
     return user;
@@ -42,11 +42,28 @@ export class UsersService {
       throw new ConflictException('Não foi possível atualizar o perfil. Verifique os dados informados.');
     }
 
-    return this.prisma.user.update({
+    const before = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, email: true },
+    });
+
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { name: dto.name, email: dto.email },
       select: { id: true, name: true, email: true, phone: true },
     });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'PROFILE_UPDATED',
+        entity: 'User',
+        entity_id: userId,
+        details: { before, after: { name: dto.name, email: dto.email } },
+      },
+    });
+
+    return updated;
   }
 
   async updatePassword(userId: string, dto: UpdatePasswordDto) {
@@ -193,10 +210,21 @@ export class UsersService {
   }
  
   async updateAvatar(userId: string, avatarUrl: string) {
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { avatar_url: avatarUrl },
       select: { id: true, avatar_url: true },
     });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'AVATAR_UPDATED',
+        entity: 'User',
+        entity_id: userId,
+      },
+    });
+
+    return updated;
   }
 }

@@ -13,7 +13,7 @@ async function bootstrap() {
     crossOriginResourcePolicy: false, // Necessário para permitir carregar imagens do mesmo servidor
   }));
  
-  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads/',
   });
 

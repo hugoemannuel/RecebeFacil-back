@@ -13,7 +13,7 @@ import {
   UploadedFile,
   ParseFilePipe,
   MaxFileSizeValidator,
-  FileTypeValidator,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -58,14 +58,19 @@ export class UsersController {
         cb(null, `avatar-${uniqueSuffix}${extname(file.originalname)}`);
       },
     }),
+    fileFilter: (req, file, cb) => {
+      if (!file.mimetype.match(/image\/(jpeg|jpg|png)/)) {
+        return cb(new BadRequestException('Apenas imagens JPG e PNG são permitidas.'), false);
+      }
+      cb(null, true);
+    },
   }))
   async uploadAvatar(
     @Request() req,
     @UploadedFile(
       new ParseFilePipe({
         validators: [
-          new MaxFileSizeValidator({ maxSize: 1024 * 1024 * 2 }), // 2MB
-          new FileTypeValidator({ fileType: /\/(jpg|jpeg|png)$/ }),
+          new MaxFileSizeValidator({ maxSize: 1024 * 1024 * 2 }),
         ],
       }),
     ) file: Express.Multer.File,

@@ -24,4 +24,9 @@ export class ReportsController {
   getPerformance(@Request() req) {
     return this.reportsService.getRecoveryPerformance(req.user.id);
   }
+
+  @Get('forecast')
+  getForecast(@Request() req) {
+    return this.reportsService.getForecast(req.user.id);
+  }
 }

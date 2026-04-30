@@ -8,7 +8,13 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 
 async function bootstrap() {
+  if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+    throw new Error('[SEGURANÇA] JWT_SECRET é obrigatório em produção. Processo encerrado.');
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.useBodyParser('json', { limit: '1mb' });
+  app.useBodyParser('urlencoded', { extended: true, limit: '1mb' });
   app.use(helmet({
     crossOriginResourcePolicy: false, // Necessário para permitir carregar imagens do mesmo servidor
   }));

@@ -2,6 +2,7 @@ import { Body, Controller, Post, Request } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { DemoService } from './demo.service';
 import { SendDemoDto } from './dto/send-demo.dto';
+import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('demo')
 export class DemoController {
@@ -9,6 +10,7 @@ export class DemoController {
 
   // 5 tentativas por 15 min por IP — proteção além do bloqueio por DemoAttempt
   @Post('send')
+  @Public()
   @Throttle({ default: { ttl: 900000, limit: 5 } })
   async send(@Body() dto: SendDemoDto, @Request() req) {
     const ip =

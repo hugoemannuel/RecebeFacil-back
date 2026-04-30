@@ -173,6 +173,22 @@ export class UsersService {
       });
     }
 
+    const now = new Date();
+    const periodEnd = new Date(now);
+    periodEnd.setFullYear(periodEnd.getFullYear() + 10);
+
+    await this.prisma.subscription.upsert({
+      where: { user_id: user.id },
+      update: {},
+      create: {
+        user_id: user.id,
+        plan_type: 'FREE',
+        status: 'ACTIVE',
+        current_period_start: now,
+        current_period_end: periodEnd,
+      },
+    });
+
     return user;
   }
 }

@@ -20,7 +20,7 @@ export class ProfilesService {
   }
 
   async updateProfile(userId: string, dto: any) {
-    return this.prisma.creditorProfile.update({
+    const updated = await this.prisma.creditorProfile.update({
       where: { user_id: userId },
       data: {
         business_name: dto.business_name,
@@ -30,5 +30,18 @@ export class ProfilesService {
         pix_merchant_name: dto.pix_merchant_name,
       },
     });
+
+    // Auditoria
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'PIX_CONFIG_UPDATED',
+        entity: 'CreditorProfile',
+        entity_id: userId,
+        details: { pix_key: dto.pix_key, pix_key_type: dto.pix_key_type },
+      },
+    });
+
+    return updated;
   }
 }

@@ -4,6 +4,7 @@ import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { PixKeyType } from '@prisma/client';
+import { canSaveMoreTemplates } from '../common/plan-modules';
 
 @Injectable()
 export class ChargesService {
@@ -208,6 +209,31 @@ export class ChargesService {
         entity_id: charge.id,
       }
     });
+
+    // 6. Opcional: Salvar como Template
+    if (dto.save_as_template && dto.template_name) {
+      const profile = await this.prisma.creditorProfile.findUnique({
+        where: { user_id: userId },
+      });
+      
+      if (profile && subscription.plan_type !== 'FREE') {
+        // Validar limite
+        const currentCount = await this.prisma.messageTemplate.count({
+          where: { creditor_profile_id: profile.id },
+        });
+
+        if (canSaveMoreTemplates(subscription.plan_type, currentCount)) {
+          await this.prisma.messageTemplate.create({
+            data: {
+              creditor_profile_id: profile.id,
+              name: dto.template_name,
+              body: dto.custom_message,
+              trigger: 'MANUAL',
+            },
+          });
+        }
+      }
+    }
 
     // Mantém a lista de clientes sincronizada
     await this.clientsService.upsertFromCharge(userId, debtor.id);

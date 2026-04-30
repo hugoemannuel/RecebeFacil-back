@@ -39,4 +39,13 @@ export class CreateChargeDto {
   @IsOptional()
   @IsEnum(['CPF', 'CNPJ', 'PHONE', 'EMAIL', 'EVP'])
   pix_key_type?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  save_as_template?: boolean;
+
+  @IsOptional()
+  @IsString()
+  template_name?: string;
 }
+

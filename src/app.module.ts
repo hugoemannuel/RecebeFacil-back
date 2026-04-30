@@ -12,6 +12,7 @@ import { SubscriptionModule } from './subscription/subscription.module';
 import { ChargesModule } from './charges/charges.module';
 import { ClientsModule } from './clients/clients.module';
 import { DemoModule } from './demo/demo.module';
+import { ProfilesModule } from './profiles/profiles.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { DemoModule } from './demo/demo.module';
     ChargesModule,
     ClientsModule,
     DemoModule,
+    ProfilesModule,
   ],
   controllers: [AppController],
   providers: [

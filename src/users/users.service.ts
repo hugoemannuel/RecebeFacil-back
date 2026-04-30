@@ -191,4 +191,12 @@ export class UsersService {
 
     return user;
   }
+ 
+  async updateAvatar(userId: string, avatarUrl: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { avatar_url: avatarUrl },
+      select: { id: true, avatar_url: true },
+    });
+  }
 }

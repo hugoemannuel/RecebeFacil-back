@@ -238,4 +238,16 @@ export class SubscriptionService {
       },
     });
   }
+
+  /**
+   * Gera o link de checkout do Asaas (Mockado para desenvolvimento).
+   */
+  async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY') {
+    // Futura integração real com Asaas aqui.
+    // Por enquanto retornamos um link de mock.
+    return {
+      invoiceUrl: 'https://sandbox.asaas.com/i/mock-payment-link',
+      status: 'PENDING',
+    };
+  }
 }

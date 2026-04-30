@@ -89,6 +89,8 @@ model User {
   password_hash String?
   is_registered Boolean @default(false) // false = Shadow User
 
+  avatar_url    String?
+
   // Relacionamentos de cobrança
   charges_as_creditor   Charge[]                @relation("CreditorCharges")
   charges_as_debtor     Charge[]                @relation("DebtorCharges")
@@ -122,6 +124,7 @@ model CreditorProfile {
   // Dados comerciais
   business_name   String?              // Nome da empresa/profissional
   document        String?              // CPF ou CNPJ (opcional no cadastro)
+  logo_url        String?              // URL da logo da empresa
 
   // Configurações PIX
   pix_key         String?              // Chave PIX

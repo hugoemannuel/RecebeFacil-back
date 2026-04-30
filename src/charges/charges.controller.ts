@@ -12,6 +12,11 @@ export class ChargesController {
   async findAll(@Request() req) {
     return this.chargesService.findAll(req.user.id);
   }
+ 
+  @Get('recurring')
+  async findAllRecurring(@Request() req) {
+    return this.chargesService.findAllRecurring(req.user.id);
+  }
 
   @Get(':id')
   async findOne(@Request() req, @Param('id') id: string) {
@@ -36,5 +41,9 @@ export class ChargesController {
   @Delete(':id')
   async deleteCharge(@Request() req, @Param('id') id: string) {
     return this.chargesService.cancelCharge(req.user.id, id);
+  }
+  @Post('recurring/:id/cancel')
+  async cancelRecurring(@Request() req, @Param('id') id: string) {
+    return this.chargesService.cancelRecurring(req.user.id, id);
   }
 }

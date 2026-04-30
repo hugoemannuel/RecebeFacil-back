@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards, Request, Body } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { SubscriptionService } from './subscription.service';
 
@@ -15,6 +15,11 @@ export class SubscriptionController {
   @Post('cancel')
   async cancel(@Request() req) {
     return this.subscriptionService.cancelSubscription(req.user.id);
+  }
+
+  @Post('checkout')
+  async checkout(@Request() req, @Body() dto: any) {
+    return this.subscriptionService.createCheckout(req.user.id, dto.planType, dto.period);
   }
 
   /**

@@ -35,6 +35,28 @@ export class ChargesService {
     }));
   }
 
+  async findAllRecurring(userId: string) {
+    const rules = await this.prisma.recurringCharge.findMany({
+      where: { creditor_id: userId },
+      include: {
+        debtors: { include: { debtor: true } },
+        _count: { select: { charges: true } }
+      },
+      orderBy: { created_at: 'desc' }
+    });
+ 
+    return rules.map(rule => ({
+      id: rule.id,
+      amount: rule.amount,
+      description: rule.description,
+      frequency: rule.frequency,
+      nextGenerationDate: rule.next_generation_date,
+      active: rule.active,
+      debtorName: rule.debtors[0]?.debtor.name || 'Vários',
+      totalGenerated: rule._count.charges
+    }));
+  }
+
   async findOne(userId: string, chargeId: string) {
     const charge = await this.prisma.charge.findUnique({
       where: { id: chargeId },
@@ -265,5 +287,17 @@ export class ChargesService {
     }
 
     return { success: true, count: validIds.length };
+  }
+ 
+  async cancelRecurring(userId: string, ruleId: string) {
+    const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
+    if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();
+ 
+    await this.prisma.recurringCharge.update({
+      where: { id: ruleId },
+      data: { active: false }
+    });
+ 
+    return { success: true };
   }
 }

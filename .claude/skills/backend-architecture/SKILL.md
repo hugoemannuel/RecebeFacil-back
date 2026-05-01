@@ -41,6 +41,11 @@ src/
   dashboard/             ← GET /dashboard (métricas, gráficos)
     dashboard.service.ts ← Promise.all paralelo, sem N+1
 
+  integrations/          ← GET/PATCH /integrations/automation, POST /integrations/asaas/acknowledge-split
+    integrations.controller.ts ← @UseGuards(JwtAuthGuard) em todos os endpoints
+    integrations.service.ts    ← getAutomationConfig, updateAutomationConfig (upsert por user_id)
+    dto/update-automation.dto.ts ← @IsBoolean, @IsInt, @Min(1), @Max(30)
+
   subscription/          ← GET /subscription/status, POST /subscription/checkout, POST /webhooks/asaas
     subscription.service.ts ← getUserPlan, activatePlan, downgradeToFree
 

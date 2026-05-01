@@ -123,9 +123,42 @@ DATABASE_URL=
 
 Nunca commitar `.env` (`.gitignore` já inclui). Em produção: AWS Secrets Manager ou Railway ENV.
 
+## Mass Assignment — Anti-pattern Crítico
+
+Nunca passar `@Body() data: any` direto para o Prisma sem DTO. Um atacante pode sobrescrever qualquer campo do model.
+
+```ts
+// PROIBIDO:
+@Patch('automation')
+async update(@Body() data: any) {
+  return this.service.update(userId, data as any); // vazamento de todos os campos
+}
+
+// CORRETO:
+@Patch('automation')
+async update(@Body() dto: UpdateAutomationDto) {
+  return this.service.update(userId, dto); // ValidationPipe filtra campos não declarados
+}
+
+// No service: expansão explícita (nunca spread direto do DTO no Prisma):
+return this.prisma.integrationConfig.upsert({
+  update: {
+    ...(dto.allows_automation !== undefined && { allows_automation: dto.allows_automation }),
+    ...(dto.automation_days_before !== undefined && { automation_days_before: dto.automation_days_before }),
+  },
+  create: { user_id: userId, ...dto },
+});
+```
+
+## Arquivos de Upload
+
+Nunca commitar arquivos binários de usuários (`uploads/`). Sempre incluir `uploads/` no `.gitignore`. Violação: dados de usuário em git history (LGPD).
+
 ## Anti-patterns
 
 - Nunca `ignoreExpiration: true` no JWT Strategy
 - Nunca salvar dados de cartão — todo processamento via Asaas (PCI DSS)
 - Nunca retornar stack trace em produção (`NODE_ENV=production` oculta automaticamente)
 - Nunca usar `Math.random()` para gerar tokens/secrets — usar `crypto`
+- Nunca `@Body() data: any` — sempre DTO com class-validator
+- Nunca `update: data as any` no Prisma — expansão explícita de campos permitidos

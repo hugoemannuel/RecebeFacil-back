@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, UseGuards, Req, Patch } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { UpdateAutomationDto } from './dto/update-automation.dto';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -26,7 +27,7 @@ export class IntegrationsController {
 
   @UseGuards(JwtAuthGuard)
   @Patch('automation')
-  async updateAutomation(@Req() req, @Body() data: any) {
-    return await this.integrationsService.updateAutomationConfig(req.user.id, data);
+  async updateAutomation(@Req() req, @Body() dto: UpdateAutomationDto) {
+    return await this.integrationsService.updateAutomationConfig(req.user.id, dto);
   }
 }

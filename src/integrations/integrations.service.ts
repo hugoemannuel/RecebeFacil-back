@@ -122,9 +122,6 @@ export class IntegrationsService {
     return config;
   }
 
-  /**
-   * Gerenciamento de Automação de WhatsApp
-   */
   async getAutomationConfig(userId: string) {
     const config = await this.prisma.integrationConfig.findUnique({
       where: { user_id: userId },
@@ -134,8 +131,8 @@ export class IntegrationsService {
 
     return {
       allows_automation: config.allows_automation,
-      automation_days_before: (config as any).automation_days_before ?? 1,
-      automation_days_after: (config as any).automation_days_after ?? 1,
+      automation_days_before: config.automation_days_before,
+      automation_days_after: config.automation_days_after,
     };
   }
 
@@ -146,10 +143,16 @@ export class IntegrationsService {
   }) {
     return this.prisma.integrationConfig.upsert({
       where: { user_id: userId },
-      update: data as any,
+      update: {
+        ...(data.allows_automation !== undefined && { allows_automation: data.allows_automation }),
+        ...(data.automation_days_before !== undefined && { automation_days_before: data.automation_days_before }),
+        ...(data.automation_days_after !== undefined && { automation_days_after: data.automation_days_after }),
+      },
       create: {
         user_id: userId,
-        ...(data as any),
+        allows_automation: data.allows_automation ?? true,
+        automation_days_before: data.automation_days_before ?? 1,
+        automation_days_after: data.automation_days_after ?? 1,
       },
     });
   }

@@ -24,8 +24,11 @@ enum PlanType {
 
 enum SubStatus {
   ACTIVE
+  INACTIVE
+  PAUSED
   CANCELED
-  PAST_DUE
+  OVERDUE
+  PENDING
 }
 
 enum SubPeriod {
@@ -197,15 +200,19 @@ model Subscription {
   user_id              String    @unique
   user                 User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
   plan_type            PlanType
-  status               SubStatus
+  status               SubStatus @default(PENDING)
   period               SubPeriod @default(MONTHLY)
-  current_period_start DateTime
-  current_period_end   DateTime
-  asaas_payment_id     String?   // ID da última cobrança no Asaas (idempotência)
+  current_period_start DateTime?
+  current_period_end   DateTime?
+  
+  // Integração Asaas
+  asaas_id             String?   @unique // ID da assinatura no Asaas
+  asaas_payment_id     String?   // ID da última cobrança no Asaas
+  last_payment_at      DateTime?
 
-  // Grace period de falha de pagamento (3 dias antes de cancelar)
-  payment_failed_at      DateTime? // Quando o pagamento falhou (PAYMENT_OVERDUE do Asaas)
-  payment_failure_reason String?   // Motivo: 'PAYMENT_OVERDUE', 'PAYMENT_DELETED', etc.
+  // Grace period de falha de pagamento (4 dias antes de cancelar)
+  payment_failed_at      DateTime?
+  payment_failure_reason String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

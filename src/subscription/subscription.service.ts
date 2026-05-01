@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanType } from '@prisma/client';
 import { PLAN_MODULES } from '../common/plan-modules';
@@ -6,6 +6,8 @@ import { AsaasService } from '../integrations/asaas.service';
 
 @Injectable()
 export class SubscriptionService {
+  private readonly logger = new Logger(SubscriptionService.name);
+
   constructor(
     private prisma: PrismaService,
     private asaasService: AsaasService,
@@ -22,7 +24,11 @@ export class SubscriptionService {
 
     if (subscription?.status === 'ACTIVE') return subscription.plan_type;
 
-    if (subscription?.status === 'CANCELED' && subscription.current_period_end > new Date()) {
+    if (
+      subscription?.status === 'CANCELED' && 
+      subscription?.current_period_end && 
+      subscription.current_period_end > new Date()
+    ) {
       return subscription.plan_type;
     }
 
@@ -38,13 +44,16 @@ export class SubscriptionService {
     });
 
     const now = new Date();
+    const currentPeriodEnd = subscription?.current_period_end;
+    
     const cancelAtPeriodEnd =
       subscription?.status === 'CANCELED' &&
-      subscription.current_period_end > now;
+      currentPeriodEnd &&
+      currentPeriodEnd > now;
 
     const plan: PlanType =
       subscription?.status === 'ACTIVE' ||
-      (subscription?.status === 'CANCELED' && subscription.current_period_end > now)
+      (subscription?.status === 'CANCELED' && currentPeriodEnd && currentPeriodEnd > now)
         ? subscription!.plan_type
         : PlanType.FREE;
 
@@ -58,7 +67,7 @@ export class SubscriptionService {
       status: subscription?.status ?? 'NONE',
       period: subscription?.period ?? null,
       current_period_end: subscription?.current_period_end ?? null,
-      cancel_at_period_end: cancelAtPeriodEnd,
+      cancel_at_period_end: !!cancelAtPeriodEnd,
       payment_failed: !!subscription?.payment_failed_at,
       payment_failed_at: subscription?.payment_failed_at ?? null,
       allowed_modules: PLAN_MODULES[plan],
@@ -152,9 +161,8 @@ export class SubscriptionService {
   }
 
   /**
-   * Registra falha de pagamento e inicia grace period de 3 dias.
+   * Registra falha de pagamento e inicia grace period de 4 dias.
    * Chamado pelo webhook PAYMENT_OVERDUE do Asaas.
-   * O downgrade real acontece via CRON após 3 dias.
    */
   async recordPaymentFailure(userId: string, reason: string) {
     const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
@@ -163,7 +171,7 @@ export class SubscriptionService {
     await this.prisma.subscription.update({
       where: { user_id: userId },
       data: {
-        status: 'PAST_DUE',
+        status: 'OVERDUE',
         payment_failed_at: new Date(),
         payment_failure_reason: reason,
       },
@@ -175,14 +183,13 @@ export class SubscriptionService {
         action: 'PAYMENT_FAILED',
         entity: 'Subscription',
         entity_id: subscription.id,
-        details: { reason, grace_period_days: 3 },
+        details: { reason, grace_period_days: 4 },
       },
     });
   }
 
   /**
    * Limpa falha de pagamento após confirmação do Asaas.
-   * Chamado pelo webhook PAYMENT_CONFIRMED do Asaas.
    */
   async clearPaymentFailure(userId: string) {
     await this.prisma.subscription.update({
@@ -196,16 +203,15 @@ export class SubscriptionService {
   }
 
   /**
-   * CRON diário: cancela assinaturas em PAST_DUE há mais de 3 dias.
-   * Chamado por @Cron em SubscriptionCronService (a implementar com NestJS Schedule).
+   * CRON diário: cancela assinaturas em OVERDUE há mais de 4 dias.
    */
   async cancelOverdueSubscriptions() {
     const gracePeriodCutoff = new Date();
-    gracePeriodCutoff.setDate(gracePeriodCutoff.getDate() - 3);
+    gracePeriodCutoff.setDate(gracePeriodCutoff.getDate() - 4);
 
     const overdueSubscriptions = await this.prisma.subscription.findMany({
       where: {
-        status: 'PAST_DUE',
+        status: 'OVERDUE',
         payment_failed_at: { lte: gracePeriodCutoff },
       },
     });
@@ -218,7 +224,7 @@ export class SubscriptionService {
   }
 
   /**
-   * Rebaixa o usuário para FREE (chamado quando pagamento falha ou é cancelado).
+   * Rebaixa o usuário para FREE.
    */
   async downgradeToFree(userId: string, reason: string) {
     const subscription = await this.prisma.subscription.findUnique({
@@ -246,7 +252,84 @@ export class SubscriptionService {
   /**
    * Gera o link de checkout real do Asaas.
    */
-  async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY') {
-    return await this.asaasService.createPlanSubscription(userId, planType, period);
+  async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
+    const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
+    
+    if (checkout.asaasId) {
+      await this.prisma.subscription.upsert({
+        where: { user_id: userId },
+        update: { 
+          asaas_id: checkout.asaasId, 
+          plan_type: planType,
+          period: period,
+          status: 'PENDING' // <--- IMPORTANTE: Volta para PENDING até o webhook confirmar
+        },
+        create: { 
+          user_id: userId, 
+          asaas_id: checkout.asaasId, 
+          plan_type: planType, 
+          period: period,
+          status: 'PENDING' 
+        },
+      });
+    }
+
+    return checkout;
+  }
+
+  /**
+   * Marca assinatura como OVERDUE via webhook do Asaas (usando asaas_id da assinatura).
+   */
+  async recordOverdueByAsaasId(asaasId: string, reason: string) {
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { asaas_id: asaasId },
+    });
+    if (!subscription) {
+      this.logger.warn(`Assinatura não encontrada para overdue. Asaas ID: ${asaasId}`);
+      return;
+    }
+    await this.recordPaymentFailure(subscription.user_id, reason);
+  }
+
+  /**
+   * Ativa a assinatura do usuário quando o webhook do Asaas confirma o pagamento.
+   */
+  async activateSubscriptionByAsaasId(asaasId: string) {
+    this.logger.log(`Buscando assinatura no banco com Asaas ID: ${asaasId}`);
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { asaas_id: asaasId }
+    });
+
+    if (!subscription) {
+      this.logger.warn(`Assinatura não encontrada para o Asaas ID: ${asaasId}`);
+      return;
+    }
+
+    this.logger.log(`Assinatura encontrada! Usuário: ${subscription.user_id}. Ativando...`);
+
+    // Calcular data de expiração com margem (32 dias)
+    const now = new Date();
+    const expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + 32);
+
+    await this.prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: 'ACTIVE',
+        last_payment_at: now,
+        current_period_start: now,
+        current_period_end: expiresAt,
+      }
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: subscription.user_id,
+        action: 'SUBSCRIPTION_ACTIVATED',
+        entity: 'Subscription',
+        entity_id: subscription.id,
+        details: { asaasId }
+      }
+    });
   }
 }

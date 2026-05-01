@@ -74,6 +74,8 @@ export class IntegrationsService {
 5. **Responsabilidade**: Você é o único responsável pela veracidade dos dados bancários informados.
 
 6. **Aceite**: Ao clicar em concordar, você autoriza a retenção automática das taxas mencionadas.
+
+7. **Inadimplência e Cancelamento**: Caso a fatura da sua assinatura permaneça em aberto por mais de **4 (quatro) dias corridos**, o seu plano será automaticamente cancelado e os serviços de intermediação e split serão suspensos até a regularização.
           `.trim(),
     };
   }

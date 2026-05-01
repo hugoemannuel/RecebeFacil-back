@@ -19,7 +19,7 @@ export class SubscriptionController {
 
   @Post('checkout')
   async checkout(@Request() req, @Body() dto: any) {
-    return this.subscriptionService.createCheckout(req.user.id, dto.planType, dto.period);
+    return this.subscriptionService.createCheckout(req.user.id, dto.planType, dto.period, dto.document);
   }
 
   /**

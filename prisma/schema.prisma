@@ -179,6 +179,10 @@ model IntegrationConfig {
   // Futuro: Asaas Connect (split de pagamentos)
   asaas_wallet_id     String? // Sub-conta do lojista no Asaas Connect
   asaas_account_key   String? // Chave de acesso da sub-conta (criptografar em repouso)
+  
+  // Auditoria de Split
+  split_terms_accepted_at DateTime?
+  split_terms_version     String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -326,4 +330,22 @@ model AuditLog {
   user User? @relation("UserAuditLogs", fields: [user_id], references: [id], onDelete: SetNull)
 
   created_at DateTime @default(now())
+}
+
+// ==========================================
+// TERMOS E TAXAS DE SPLIT (DINÂMICO)
+// ==========================================
+model SplitTerm {
+  id              String   @id @default(uuid())
+  version         String   @unique
+  content         String   @db.Text
+  is_active       Boolean  @default(true)
+  
+  platform_fee_pct Decimal @default(1.0)
+  asaas_pix_fee    String  @default("R$ 0,99")
+  asaas_boleto_fee String  @default("R$ 1,99")
+  asaas_card_fee   String  @default("2.99% + R$ 0,49")
+
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
 }

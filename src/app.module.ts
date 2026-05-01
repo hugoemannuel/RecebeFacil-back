@@ -17,6 +17,7 @@ import { ProfilesModule } from './profiles/profiles.module';
 import { ReportsModule } from './reports/reports.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AutomationModule } from './automation/automation.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { AutomationModule } from './automation/automation.module';
     ProfilesModule,
     ReportsModule,
     AutomationModule,
+    IntegrationsModule,
   ],
   controllers: [AppController],
   providers: [

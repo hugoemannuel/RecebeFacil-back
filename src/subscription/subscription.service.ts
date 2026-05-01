@@ -2,10 +2,14 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanType } from '@prisma/client';
 import { PLAN_MODULES } from '../common/plan-modules';
+import { AsaasService } from '../integrations/asaas.service';
 
 @Injectable()
 export class SubscriptionService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private asaasService: AsaasService,
+  ) {}
 
   /**
    * Retorna o plano ativo do usuário.
@@ -240,14 +244,9 @@ export class SubscriptionService {
   }
 
   /**
-   * Gera o link de checkout do Asaas (Mockado para desenvolvimento).
+   * Gera o link de checkout real do Asaas.
    */
   async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY') {
-    // Futura integração real com Asaas aqui.
-    // Por enquanto retornamos um link de mock.
-    return {
-      invoiceUrl: 'https://sandbox.asaas.com/i/mock-payment-link',
-      status: 'PENDING',
-    };
+    return await this.asaasService.createPlanSubscription(userId, planType, period);
   }
 }

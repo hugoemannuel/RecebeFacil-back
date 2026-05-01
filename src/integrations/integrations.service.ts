@@ -49,13 +49,32 @@ export class IntegrationsService {
 
     return {
       version: term.version,
-      platformFeePct: Number(term.platform_fee_pct),
+      fees: {
+        PRO: 2.0,
+        UNLIMITED: 1.0,
+      },
       asaasFees: {
         pix: term.asaas_pix_fee,
         boleto: term.asaas_boleto_fee,
         creditCard: term.asaas_card_fee,
       },
-      contractText: term.content,
+      contractText: `
+### TERMOS DE INTERMEDIAÇÃO DE PAGAMENTOS (SPLIT)
+
+1. **Natureza do Serviço**: O RecebeFácil atua como parceiro tecnológico integrador do gateway Asaas. Ao ativar o split, você utiliza a infraestrutura de subcontas (Asaas Connect).
+
+2. **Taxas da Plataforma**: Pela utilização do serviço de intermediação, automação de baixa e conciliação, o RecebeFácil cobrará uma taxa de intermediação tecnológica sobre o valor bruto de cada cobrança liquidada, conforme seu plano:
+   - **Plano PRO**: 2% (dois por cento)
+   - **Plano UNLIMITED**: 1% (um por cento)
+
+3. **Taxas do Gateway (Asaas)**: Além da taxa da plataforma, o Asaas aplica suas próprias taxas transacionais (ex: R$ 0,99 por PIX). Estas taxas são descontadas diretamente pelo gateway no momento da liquidação.
+
+4. **Criação de Subconta**: Para que o serviço funcione, seus dados (CPF/CNPJ e Bancários) serão enviados ao Asaas para a criação de uma subconta vinculada à conta principal do RecebeFácil.
+
+5. **Responsabilidade**: Você é o único responsável pela veracidade dos dados bancários informados.
+
+6. **Aceite**: Ao clicar em concordar, você autoriza a retenção automática das taxas mencionadas.
+          `.trim(),
     };
   }
 
@@ -70,7 +89,7 @@ export class IntegrationsService {
     // Aqui no futuro faremos a chamada real para o Asaas para criar a subaccount.
     // Por enquanto, salvamos o aceite e os dados no IntegrationConfig.
     
-    return await this.prisma.integrationConfig.upsert({
+    const config = await this.prisma.integrationConfig.upsert({
       where: { user_id: userId },
       update: {
         split_terms_accepted_at: new Date(),
@@ -82,5 +101,22 @@ export class IntegrationsService {
         split_terms_version: data.version,
       }
     });
+
+    // Auditoria Geral (Imutável)
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'SPLIT_TERMS_ACCEPTED',
+        entity: 'IntegrationConfig',
+        entity_id: config.id,
+        details: { 
+          version: data.version,
+          accepted_at: new Date(),
+          document_provided: !!data.document
+        }
+      }
+    });
+
+    return config;
   }
 }

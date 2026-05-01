@@ -175,6 +175,9 @@ model IntegrationConfig {
   zapi_instance_id    String? // ID da instância Z-API do lojista (futuro: número próprio)
   zapi_instance_token String? // Token da instância Z-API
   allows_automation   Boolean @default(true) // Opt-out de automações (se devedor enviou PARAR)
+  
+  automation_days_before Int @default(1)
+  automation_days_after  Int @default(1)
 
   // Asaas (Gateway de pagamento para ASSINATURA do lojista)
   asaas_customer_id   String? // ID do lojista como Customer no Asaas

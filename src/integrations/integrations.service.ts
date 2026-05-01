@@ -121,4 +121,36 @@ export class IntegrationsService {
 
     return config;
   }
+
+  /**
+   * Gerenciamento de Automação de WhatsApp
+   */
+  async getAutomationConfig(userId: string) {
+    const config = await this.prisma.integrationConfig.findUnique({
+      where: { user_id: userId },
+    });
+
+    if (!config) return null;
+
+    return {
+      allows_automation: config.allows_automation,
+      automation_days_before: (config as any).automation_days_before ?? 1,
+      automation_days_after: (config as any).automation_days_after ?? 1,
+    };
+  }
+
+  async updateAutomationConfig(userId: string, data: {
+    allows_automation?: boolean;
+    automation_days_before?: number;
+    automation_days_after?: number;
+  }) {
+    return this.prisma.integrationConfig.upsert({
+      where: { user_id: userId },
+      update: data as any,
+      create: {
+        user_id: userId,
+        ...(data as any),
+      },
+    });
+  }
 }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req, Patch } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -16,5 +16,17 @@ export class IntegrationsController {
   @Post('asaas/acknowledge-split')
   async acknowledgeSplit(@Req() req, @Body() data: any) {
     return await this.integrationsService.acknowledgeSplitTerms(req.user.id, data);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('automation')
+  async getAutomation(@Req() req) {
+    return await this.integrationsService.getAutomationConfig(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('automation')
+  async updateAutomation(@Req() req, @Body() data: any) {
+    return await this.integrationsService.updateAutomationConfig(req.user.id, data);
   }
 }

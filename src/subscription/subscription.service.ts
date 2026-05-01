@@ -256,22 +256,42 @@ export class SubscriptionService {
     const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
     
     if (checkout.asaasId) {
+      const isAlreadyActive = checkout.status === 'ACTIVE';
+      const now = new Date();
+      const periodEnd = new Date(now);
+      if (period === 'YEARLY') periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+      else periodEnd.setMonth(periodEnd.getMonth() + 1);
+
       await this.prisma.subscription.upsert({
         where: { user_id: userId },
-        update: { 
-          asaas_id: checkout.asaasId, 
+        update: {
+          asaas_id: checkout.asaasId,
           plan_type: planType,
-          period: period,
-          status: 'PENDING' // <--- IMPORTANTE: Volta para PENDING até o webhook confirmar
+          period,
+          status: isAlreadyActive ? 'ACTIVE' : 'PENDING',
+          ...(isAlreadyActive && {
+            last_payment_at: now,
+            current_period_start: now,
+            current_period_end: periodEnd,
+          }),
         },
-        create: { 
-          user_id: userId, 
-          asaas_id: checkout.asaasId, 
-          plan_type: planType, 
-          period: period,
-          status: 'PENDING' 
+        create: {
+          user_id: userId,
+          asaas_id: checkout.asaasId,
+          plan_type: planType,
+          period,
+          status: isAlreadyActive ? 'ACTIVE' : 'PENDING',
+          ...(isAlreadyActive && {
+            last_payment_at: now,
+            current_period_start: now,
+            current_period_end: periodEnd,
+          }),
         },
       });
+
+      if (isAlreadyActive) {
+        this.logger.log(`Plano ${planType} ativado imediatamente para usuário ${userId} (Asaas status: ACTIVE)`);
+      }
     }
 
     return checkout;

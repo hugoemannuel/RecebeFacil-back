@@ -153,7 +153,7 @@ export class AsaasService {
 
       return {
         invoiceUrl: paymentUrl,
-        status: 'PENDING',
+        status: response.data.status as string,
         asaasId: response.data.id,
       };
     } catch (error) {

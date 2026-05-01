@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Headers, UnauthorizedException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Controller, Get, Post, HttpCode, Body, Headers, UnauthorizedException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionService } from '../subscription/subscription.service';
 import { Public } from '../auth/decorators/public.decorator';
@@ -21,6 +21,7 @@ export class AsaasWebhookController {
 
   @Post('webhook')
   @Public()
+  @HttpCode(200)
   async handleWebhook(
     @Body() body: any,
     @Headers('asaas-access-token') token: string,

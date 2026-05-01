@@ -32,10 +32,16 @@ NestJS 11 monolith with PostgreSQL (Prisma ORM). Each domain is a standalone mod
 src/
 ├─ app.module.ts         ← Root: ThrottlerModule (100 req/min) + global guards
 ├─ auth/                 ← POST /auth/register, /auth/login (JWT + bcrypt)
-├─ users/                ← UserService (shadow user promotion logic)
-├─ charges/              ← /charges CRUD, bulk operations
-├─ subscription/         ← /subscription/status
-├─ dashboard/            ← /dashboard/metrics
+├─ users/                ← UserService, GET/PATCH /users/me (perfil, senha, LGPD)
+├─ charges/              ← /charges CRUD, bulk operations, recurring charges
+├─ clients/              ← /clients CRUD (relacionamento credor↔devedor + notas)
+├─ profiles/             ← /profiles GET/PATCH (CreditorProfile, PIX config, logo)
+├─ reports/              ← /reports (stub de relatórios)
+├─ automation/           ← CRON jobs: recurring charge generation, WhatsApp reminders
+├─ subscription/         ← /subscription/status, checkout, /webhooks/asaas
+├─ dashboard/            ← /dashboard/metrics (Promise.all paralelo, sem N+1)
+├─ whatsapp/             ← WhatsAppService — único ponto de integração Z-API
+├─ demo/                 ← POST /demo/send (público, sem AuthGuard, rate limit por IP hash)
 ├─ common/               ← PlanGuard, @RequiresModule, PLAN_MODULES, plan limits
 └─ prisma/               ← PrismaService singleton
 ```
@@ -62,7 +68,9 @@ src/
 
 ## Prisma Schema
 
-Core tables: `User`, `CreditorProfile`, `IntegrationConfig`, `Subscription`, `Charge`, `RecurringCharge`, `MessageTemplate`, `MessageHistory`, `AuditLog`.
+Core tables: `User`, `CreditorProfile`, `IntegrationConfig`, `Subscription`, `Charge`, `RecurringCharge`, `RecurringChargeDebtor`, `Client`, `MessageTemplate`, `MessageHistory`, `AuditLog`, `DemoAttempt`.
+
+New enums: `SubModule { HOME CHARGES CLIENTS REPORTS EXCEL_IMPORT }` · `Frequency { WEEKLY MONTHLY YEARLY }` · `SubPeriod { MONTHLY YEARLY }`.
 
 - Monetary values: always `Int` in **centavos** (R$ 1,00 = 100)
 - `User` stores identity/auth only; business data goes in `CreditorProfile`

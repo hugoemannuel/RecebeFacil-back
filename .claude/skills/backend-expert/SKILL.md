@@ -19,15 +19,25 @@ src/
     jwt.strategy.ts     ← valida JWT, verifica is_registered, strip password_hash → req.user
     dto/login.dto.ts | register.dto.ts
 
-  charges/              ← CRUD + bulk actions
+  charges/              ← CRUD + bulk actions + recurring charges
     charges.controller.ts ← @UseGuards(AuthGuard('jwt')) na classe
     charges.service.ts    ← plan limit, recurrence check, shadow user, auditoria, IDOR
-    dto/create-charge.dto.ts
+    dto/create-charge.dto.ts | update-charge-status.dto.ts | update-recurring-charge.dto.ts
 
-  common/
-    plan.guard.ts                ← PlanGuard (CanActivate): consulta Subscription, valida módulo
-    plan-modules.ts              ← PLAN_MODULES, TEMPLATE_LIMITS, canAccessModule()
-    requires-module.decorator.ts ← @RequiresModule('CLIENTS')
+  clients/              ← GET/POST/PATCH /clients
+    clients.controller.ts ← @UseGuards(AuthGuard('jwt'), PlanGuard) + @RequiresModule('CLIENTS')
+    clients.service.ts    ← CRUD Client (creditor_id+debtor_id+notes), IDOR check
+    dto/create-client.dto.ts | update-client.dto.ts
+
+  profiles/             ← GET/PATCH /profiles (CreditorProfile, PIX, logo)
+    profiles.controller.ts ← @UseGuards(AuthGuard('jwt'))
+    profiles.service.ts    ← upsert CreditorProfile; audita PIX_CONFIG_UPDATED / PROFILE_UPDATED
+
+  reports/              ← GET /reports
+    reports.controller.ts | reports.service.ts
+
+  automation/           ← CRON jobs: recurring charge generation + WhatsApp reminders
+    automation.service.ts ← @Cron schedules (ver seção CRON Jobs abaixo)
 
   dashboard/
     dashboard.service.ts  ← Promise.all paralelo para métricas, sem N+1
@@ -40,10 +50,11 @@ src/
     whatsapp.service.ts  ← ÚNICO ponto de integração Z-API (envio de texto, imagem, botão PIX)
 
   demo/
-    demo.controller.ts   ← POST /demo/send (endpoint público, sem AuthGuard, para landing page)
+    demo.controller.ts   ← POST /demo/send (público, sem AuthGuard)
+    demo.service.ts      ← rate limit por hash SHA-256 do IP (model DemoAttempt)
 
   users/
-    users.service.ts  ← findByEmail, findByPhone, findById, registerUser (shadow user logic)
+    users.service.ts  ← findByEmail, findByPhone, findById, registerUser, updatePassword, deleteAccount
 
   prisma/
     prisma.service.ts ← extends PrismaClient, onModuleInit
@@ -108,13 +119,22 @@ console.error(`[Auth] E-mail já em uso: ${dto.email}`); // log interno apenas
 
 **Enums:**
 ```prisma
-PlanType      { FREE STARTER PRO UNLIMITED }
-SubStatus     { ACTIVE CANCELED PAST_DUE }
-ChargeStatus  { PENDING PAID OVERDUE CANCELED }
-TriggerType   { MANUAL AUTO_REMINDER_BEFORE AUTO_REMINDER_DUE AUTO_REMINDER_OVERDUE }
-PixKeyType    { CPF CNPJ PHONE EMAIL EVP }
+PlanType       { FREE STARTER PRO UNLIMITED }
+SubStatus      { ACTIVE CANCELED PAST_DUE }
+SubPeriod      { MONTHLY YEARLY }
+SubModule      { HOME CHARGES CLIENTS REPORTS EXCEL_IMPORT }
+ChargeStatus   { PENDING PAID OVERDUE CANCELED }
+TriggerType    { MANUAL AUTO_REMINDER_BEFORE AUTO_REMINDER_DUE AUTO_REMINDER_OVERDUE }
+Frequency      { WEEKLY MONTHLY YEARLY }
+PixKeyType     { CPF CNPJ PHONE EMAIL EVP }
 MessageTrigger { MANUAL BEFORE_DUE ON_DUE OVERDUE }
 ```
+
+**Modelos chave:**
+- `Client` — relacionamento credor↔devedor com campo `notes`; chave `(creditor_id, debtor_id)` única
+- `RecurringCharge` — definição de cobrança recorrente (frequência, valor, data início/fim)
+- `RecurringChargeDebtor` — many-to-many: qual devedor entra em qual cobrança recorrente
+- `DemoAttempt` — controle de rate limit da demo pública (hash SHA-256 do IP, `created_at`)
 
 **Upsert pattern:**
 ```ts
@@ -263,7 +283,7 @@ await this.prisma.auditLog.create({
 });
 ```
 
-Actions: `CHARGE_CREATED` · `CHARGE_CANCELED` · `CHARGE_BULK_CANCELED` · `PIX_CONFIG_UPDATED` · `SUBSCRIPTION_ACTIVATED` · `SUBSCRIPTION_DOWNGRADED` · `USER_REGISTERED_NEW` · `USER_REGISTERED_FROM_SHADOW`
+Actions: `CHARGE_CREATED` · `CHARGE_CANCELED` · `CHARGE_BULK_CANCELED` · `PIX_CONFIG_UPDATED` · `PROFILE_UPDATED` · `SUBSCRIPTION_ACTIVATED` · `SUBSCRIPTION_DOWNGRADED` · `USER_REGISTERED_NEW` · `USER_REGISTERED_FROM_SHADOW` · `PASSWORD_CHANGED` · `ACCOUNT_DELETED`
 
 ---
 

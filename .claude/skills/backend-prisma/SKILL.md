@@ -67,14 +67,52 @@ if (shadowUser) {
 ## Enums
 
 ```prisma
-enum PlanType      { FREE STARTER PRO UNLIMITED }
-enum SubStatus     { ACTIVE CANCELED PAST_DUE }
-enum SubPeriod     { MONTHLY YEARLY }
-enum ChargeStatus  { PENDING PAID OVERDUE CANCELED }
-enum TriggerType   { MANUAL AUTO_REMINDER_BEFORE AUTO_REMINDER_DUE AUTO_REMINDER_OVERDUE }
-enum Frequency     { WEEKLY MONTHLY YEARLY }
-enum PixKeyType    { CPF CNPJ PHONE EMAIL EVP }
+enum PlanType       { FREE STARTER PRO UNLIMITED }
+enum SubStatus      { ACTIVE CANCELED PAST_DUE }
+enum SubPeriod      { MONTHLY YEARLY }
+enum SubModule      { HOME CHARGES CLIENTS REPORTS EXCEL_IMPORT }
+enum ChargeStatus   { PENDING PAID OVERDUE CANCELED }
+enum TriggerType    { MANUAL AUTO_REMINDER_BEFORE AUTO_REMINDER_DUE AUTO_REMINDER_OVERDUE }
+enum Frequency      { WEEKLY MONTHLY YEARLY }
+enum PixKeyType     { CPF CNPJ PHONE EMAIL EVP }
 enum MessageTrigger { MANUAL BEFORE_DUE ON_DUE OVERDUE }
+```
+
+## Novos Modelos
+
+```prisma
+// Relacionamento credor ↔ devedor com notas
+model Client {
+  creditor_id String
+  debtor_id   String
+  notes       String?
+  @@unique([creditor_id, debtor_id])
+}
+
+// Definição de cobrança recorrente
+model RecurringCharge {
+  id           String    @id @default(uuid())
+  creditor_id  String
+  frequency    Frequency
+  amount       Int       // centavos
+  start_date   DateTime
+  end_date     DateTime?
+  // RelRelação many-to-many via RecurringChargeDebtor
+}
+
+// Many-to-many: recorrente ↔ devedor
+model RecurringChargeDebtor {
+  recurring_charge_id String
+  debtor_id           String
+  @@unique([recurring_charge_id, debtor_id])
+}
+
+// Rate limit da demo pública (hash SHA-256 do IP)
+model DemoAttempt {
+  id         String   @id @default(uuid())
+  ip_hash    String
+  created_at DateTime @default(now())
+}
 ```
 
 ## Campos Críticos de Segurança

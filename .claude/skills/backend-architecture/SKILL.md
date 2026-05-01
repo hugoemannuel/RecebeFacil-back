@@ -17,15 +17,26 @@ src/
     jwt.strategy.ts      ← valida JWT, verifica is_registered, strip password_hash
     dto/login.dto.ts | register.dto.ts
 
-  charges/               ← CRUD + bulk actions
+  charges/               ← CRUD + bulk actions + recurring charges
     charges.controller.ts ← @UseGuards(AuthGuard('jwt')) na classe inteira
     charges.service.ts    ← IDOR check, plan limits, shadow user, auditoria
-    dto/create-charge.dto.ts
+    dto/create-charge.dto.ts | update-charge-status.dto.ts | update-recurring-charge.dto.ts
 
-  common/
-    plan.guard.ts          ← PlanGuard (CanActivate): valida plano via @RequiresModule
-    plan-modules.ts        ← PLAN_MODULES, TEMPLATE_LIMITS, canAccessModule()
-    requires-module.decorator.ts ← @RequiresModule('CLIENTS')
+  clients/               ← GET/POST/PATCH /clients
+    clients.controller.ts ← @UseGuards(AuthGuard('jwt'), PlanGuard) + @RequiresModule('CLIENTS')
+    clients.service.ts    ← CRUD de Client (credor↔devedor) com IDOR check
+    dto/create-client.dto.ts | update-client.dto.ts
+
+  profiles/              ← GET/PATCH /profiles (CreditorProfile, PIX, logo)
+    profiles.controller.ts ← @UseGuards(AuthGuard('jwt'))
+    profiles.service.ts    ← upsert CreditorProfile, audita PIX_CONFIG_UPDATED
+
+  reports/               ← GET /reports
+    reports.controller.ts
+    reports.service.ts
+
+  automation/            ← CRON jobs para cobranças recorrentes e lembretes WhatsApp
+    automation.service.ts ← @Cron schedules: recurring charge generation, sendAutomatedReminders
 
   dashboard/             ← GET /dashboard (métricas, gráficos)
     dashboard.service.ts ← Promise.all paralelo, sem N+1
@@ -37,7 +48,8 @@ src/
     whatsapp.service.ts  ← send text, image, PIX button; nunca chamar Z-API fora daqui
 
   demo/                  ← Endpoint público (sem AuthGuard) para demo da landing page
-    demo.controller.ts   ← POST /demo/send
+    demo.controller.ts   ← POST /demo/send (rate limit por hash SHA-256 do IP)
+    demo.service.ts      ← verifica DemoAttempt (máx por IP), persiste tentativa
 
   users/
     users.controller.ts  ← GET/PATCH/DELETE /users/me (perfil, senha, exclusão LGPD)
@@ -110,7 +122,7 @@ await this.prisma.auditLog.create({
 });
 ```
 
-Actions auditadas: `CHARGE_CREATED`, `CHARGE_CANCELED`, `CHARGE_BULK_CANCELED`, `PIX_CONFIG_UPDATED`, `SUBSCRIPTION_ACTIVATED`, `SUBSCRIPTION_DOWNGRADED`, `USER_REGISTERED_NEW`, `USER_REGISTERED_FROM_SHADOW`, `PASSWORD_CHANGED`, `ACCOUNT_DELETED`
+Actions auditadas: `CHARGE_CREATED`, `CHARGE_CANCELED`, `CHARGE_BULK_CANCELED`, `PIX_CONFIG_UPDATED`, `PROFILE_UPDATED`, `SUBSCRIPTION_ACTIVATED`, `SUBSCRIPTION_DOWNGRADED`, `USER_REGISTERED_NEW`, `USER_REGISTERED_FROM_SHADOW`, `PASSWORD_CHANGED`, `ACCOUNT_DELETED`
 
 ## Rate Limiting (AppModule)
 

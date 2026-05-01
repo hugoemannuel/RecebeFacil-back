@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
+import { AutomateChargeDto } from './dto/automate-charge.dto';
 import { PixKeyType } from '@prisma/client';
 import { canSaveMoreTemplates } from '../common/plan-modules';
 
@@ -457,5 +458,43 @@ export class ChargesService {
     });
 
     return { success: true };
+  }
+
+  async automateCharge(userId: string, chargeId: string, dto: AutomateChargeDto) {
+    const charge = await this.prisma.charge.findUnique({
+      where: { id: chargeId },
+      include: { debtor: true },
+    });
+    if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
+    if (charge.recurring_charge_id) throw new ForbiddenException('Cobrança já possui automação configurada.');
+
+    const recurringCharge = await this.prisma.recurringCharge.create({
+      data: {
+        creditor_id: userId,
+        amount: charge.amount,
+        description: charge.description,
+        frequency: dto.frequency as any,
+        next_generation_date: new Date(dto.next_generation_date),
+        active: true,
+        custom_message: dto.custom_message ?? charge.custom_message,
+        debtors: { create: { debtor_id: charge.debtor_id } },
+      },
+    });
+
+    await this.prisma.charge.update({
+      where: { id: chargeId },
+      data: { recurring_charge_id: recurringCharge.id },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'RECURRING_CHARGE_CREATED',
+        entity: 'RecurringCharge',
+        entity_id: recurringCharge.id,
+      },
+    });
+
+    return { success: true, recurringChargeId: recurringCharge.id };
   }
 }

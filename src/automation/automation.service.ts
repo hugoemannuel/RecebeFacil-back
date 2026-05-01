@@ -145,8 +145,10 @@ export class AutomationService {
 
   private buildAutomaticMessage(charge: any, trigger: string, templateBody?: string): string {
     const amountStr = (charge.amount / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const businessName = charge.creditor.creditor_profile?.business_name || charge.creditor.name;
+    const profile = charge.creditor.creditor_profile;
+    const businessName = profile?.business_name || charge.creditor.name;
     const dueDateStr = new Date(charge.due_date).toLocaleDateString('pt-BR');
+    const pixKey = profile?.pix_key || '[Chave PIX não configurada]';
 
     if (templateBody) {
       return templateBody
@@ -154,21 +156,25 @@ export class AutomationService {
         .replace(/{{valor}}/g, amountStr)
         .replace(/{{vencimento}}/g, dueDateStr)
         .replace(/{{empresa}}/g, businessName)
+        .replace(/{{chave_pix}}/g, pixKey)
         .replace(/{{link_pagamento}}/g, `recebefacil.com.br/pay/${charge.id}`);
     }
 
+    // Fallback para mensagens padrão do sistema (Regras de Ouro)
+    const pixSuffix = `\n\n💰 *Pague via PIX (Chave):*\n${pixKey}`;
+
     if (trigger === 'BEFORE_DUE') {
-      return `Olá *${charge.debtor.name}*! 👋\n\nLembrete amigável: sua fatura de *${amountStr}* com a *${businessName}* vence em breve (${dueDateStr}).\n\nLink para pagamento:\nrecebefacil.com.br/pay/${charge.id}`;
+      return `Olá *${charge.debtor.name}*! 👋\n\nLembrete amigável: sua fatura de *${amountStr}* com a *${businessName}* vence em breve (${dueDateStr}).${pixSuffix}\n\nLink: recebefacil.com.br/pay/${charge.id}`;
     }
 
     if (trigger === 'ON_DUE') {
-      return `Oi *${charge.debtor.name}*! 🚀\n\nSua fatura de *${amountStr}* da *${businessName}* vence hoje.\n\nAcesse o link para pagar via PIX:\nrecebefacil.com.br/pay/${charge.id}`;
+      return `Oi *${charge.debtor.name}*! 🚀\n\nSua fatura de *${amountStr}* da *${businessName}* vence hoje.${pixSuffix}\n\nAcesse o link para o QR Code: recebefacil.com.br/pay/${charge.id}`;
     }
 
     if (trigger === 'OVERDUE') {
-      return `Olá *${charge.debtor.name}*. ⚠️\n\nSua fatura de *${amountStr}* com a *${businessName}* está vencida.\n\nEvite bloqueios e regularize agora:\nrecebefacil.com.br/pay/${charge.id}`;
+      return `Olá *${charge.debtor.name}*. ⚠️\n\nSua fatura de *${amountStr}* com a *${businessName}* está vencida.${pixSuffix}\n\nRegularize agora: recebefacil.com.br/pay/${charge.id}`;
     }
 
-    return `Olá ${charge.debtor.name}, cobrança de ${amountStr} disponível.`;
+    return `Olá ${charge.debtor.name}, cobrança de ${amountStr} disponível. Chave PIX: ${pixKey}`;
   }
 }

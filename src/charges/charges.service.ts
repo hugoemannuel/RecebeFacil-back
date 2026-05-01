@@ -358,6 +358,24 @@ export class ChargesService {
     return { success: true, count: validIds.length };
   }
  
+  async findOneRecurring(userId: string, ruleId: string) {
+    const rule = await this.prisma.recurringCharge.findUnique({
+      where: { id: ruleId },
+      include: { debtors: { include: { debtor: true } } },
+    });
+    if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();
+
+    return {
+      id: rule.id,
+      amount: rule.amount,
+      description: rule.description,
+      frequency: rule.frequency,
+      nextGenerationDate: rule.next_generation_date,
+      custom_message: rule.custom_message ?? null,
+      debtorName: rule.debtors[0]?.debtor.name || 'Vários',
+    };
+  }
+
   async cancelRecurring(userId: string, ruleId: string) {
     const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
     if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();

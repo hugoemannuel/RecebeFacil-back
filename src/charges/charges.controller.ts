@@ -20,6 +20,11 @@ export class ChargesController {
     return this.chargesService.findAllRecurring(req.user.id);
   }
 
+  @Get('recurring/:id')
+  async findOneRecurring(@Request() req, @Param('id') id: string) {
+    return this.chargesService.findOneRecurring(req.user.id, id);
+  }
+
   @Get(':id')
   async findOne(@Request() req, @Param('id') id: string) {
     return this.chargesService.findOne(req.user.id, id);

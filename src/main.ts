@@ -6,20 +6,27 @@ import helmet from 'helmet';
 
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import { mkdirSync } from 'fs';
 
 async function bootstrap() {
   if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
     throw new Error('[SEGURANÇA] JWT_SECRET é obrigatório em produção. Processo encerrado.');
   }
 
+  if (!process.env.DATABASE_URL) {
+    throw new Error('[CONFIG] DATABASE_URL não está definida. Configure a variável de ambiente no Railway.');
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useBodyParser('json', { limit: '1mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '1mb' });
   app.use(helmet({
-    crossOriginResourcePolicy: false, // Necessário para permitir carregar imagens do mesmo servidor
+    crossOriginResourcePolicy: false,
   }));
- 
-  app.useStaticAssets(join(process.cwd(), 'uploads'), {
+
+  const uploadsDir = join(process.cwd(), 'uploads');
+  mkdirSync(uploadsDir, { recursive: true });
+  app.useStaticAssets(uploadsDir, {
     prefix: '/uploads/',
   });
 

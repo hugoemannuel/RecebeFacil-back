@@ -19,5 +19,7 @@ COPY --from=build /app/package*.json ./
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./
 
+RUN mkdir -p /app/uploads && npx prisma generate
+
 EXPOSE 3001
 CMD ["npm", "run", "start:prod"]

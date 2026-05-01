@@ -46,6 +46,11 @@ export class AsaasWebhookController {
         await this.handlePaymentOverdue(body.payment);
         break;
 
+      case 'PAYMENT_DELETED':
+      case 'PAYMENT_REFUNDED':
+        await this.handlePaymentReverted(body.payment, event);
+        break;
+
       default:
         this.logger.debug(`Evento ignorado: ${event}`);
     }
@@ -55,8 +60,8 @@ export class AsaasWebhookController {
 
   private async handlePaymentConfirmed(payment: any) {
     if (!payment?.subscription) return;
-    this.logger.log(`Pagamento confirmado para assinatura: ${payment.subscription}`);
-    await this.subscriptionService.activateSubscriptionByAsaasId(payment.subscription);
+    this.logger.log(`Pagamento confirmado. Assinatura: ${payment.subscription}, Payment: ${payment.id}`);
+    await this.subscriptionService.activateSubscriptionByAsaasId(payment.subscription, payment.id);
   }
 
   private async handlePaymentOverdue(payment: any) {
@@ -64,5 +69,12 @@ export class AsaasWebhookController {
     if (!asaasId) return;
     this.logger.warn(`Pagamento vencido para assinatura: ${asaasId}`);
     await this.subscriptionService.recordOverdueByAsaasId(asaasId, 'PAYMENT_OVERDUE');
+  }
+
+  private async handlePaymentReverted(payment: any, event: string) {
+    const asaasId = payment?.subscription;
+    if (!asaasId) return;
+    this.logger.warn(`Pagamento revertido (${event}) para assinatura: ${asaasId}`);
+    await this.subscriptionService.downgradeByAsaasId(asaasId, event);
   }
 }

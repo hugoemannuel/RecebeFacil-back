@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanType } from '@prisma/client';
 import { PLAN_MODULES } from '../common/plan-modules';
@@ -129,13 +130,14 @@ export class SubscriptionService {
 
   /**
    * Cancela a assinatura do usuário mantendo acesso até o fim do período pago.
+   * Também aceita cancelamento em status OVERDUE (grace period).
    */
   async cancelSubscription(userId: string) {
     const subscription = await this.prisma.subscription.findUnique({
       where: { user_id: userId },
     });
 
-    if (!subscription || subscription.status !== 'ACTIVE') {
+    if (!subscription || !['ACTIVE', 'OVERDUE'].includes(subscription.status)) {
       throw new BadRequestException('Nenhuma assinatura ativa encontrada.');
     }
 
@@ -203,8 +205,9 @@ export class SubscriptionService {
   }
 
   /**
-   * CRON diário: cancela assinaturas em OVERDUE há mais de 4 dias.
+   * CRON diário à meia-noite: cancela assinaturas em OVERDUE há mais de 4 dias.
    */
+  @Cron('0 0 * * *')
   async cancelOverdueSubscriptions() {
     const gracePeriodCutoff = new Date();
     gracePeriodCutoff.setDate(gracePeriodCutoff.getDate() - 4);
@@ -256,42 +259,22 @@ export class SubscriptionService {
     const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
     
     if (checkout.asaasId) {
-      const isAlreadyActive = checkout.status === 'ACTIVE';
-      const now = new Date();
-      const periodEnd = new Date(now);
-      if (period === 'YEARLY') periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-      else periodEnd.setMonth(periodEnd.getMonth() + 1);
-
       await this.prisma.subscription.upsert({
         where: { user_id: userId },
         update: {
           asaas_id: checkout.asaasId,
           plan_type: planType,
           period,
-          status: isAlreadyActive ? 'ACTIVE' : 'PENDING',
-          ...(isAlreadyActive && {
-            last_payment_at: now,
-            current_period_start: now,
-            current_period_end: periodEnd,
-          }),
+          status: 'PENDING',
         },
         create: {
           user_id: userId,
           asaas_id: checkout.asaasId,
           plan_type: planType,
           period,
-          status: isAlreadyActive ? 'ACTIVE' : 'PENDING',
-          ...(isAlreadyActive && {
-            last_payment_at: now,
-            current_period_start: now,
-            current_period_end: periodEnd,
-          }),
+          status: 'PENDING',
         },
       });
-
-      if (isAlreadyActive) {
-        this.logger.log(`Plano ${planType} ativado imediatamente para usuário ${userId} (Asaas status: ACTIVE)`);
-      }
     }
 
     return checkout;
@@ -312,12 +295,12 @@ export class SubscriptionService {
   }
 
   /**
-   * Ativa a assinatura do usuário quando o webhook do Asaas confirma o pagamento.
+   * Ativa a assinatura quando o webhook do Asaas confirma o pagamento.
+   * Idempotente: ignora se o mesmo payment_id já foi processado.
    */
-  async activateSubscriptionByAsaasId(asaasId: string) {
-    this.logger.log(`Buscando assinatura no banco com Asaas ID: ${asaasId}`);
+  async activateSubscriptionByAsaasId(asaasId: string, paymentId: string) {
     const subscription = await this.prisma.subscription.findFirst({
-      where: { asaas_id: asaasId }
+      where: { asaas_id: asaasId },
     });
 
     if (!subscription) {
@@ -325,22 +308,34 @@ export class SubscriptionService {
       return;
     }
 
-    this.logger.log(`Assinatura encontrada! Usuário: ${subscription.user_id}. Ativando...`);
+    if (subscription.asaas_payment_id === paymentId) {
+      this.logger.log(`Webhook duplicado ignorado. Payment ID: ${paymentId}`);
+      return;
+    }
 
-    // Calcular data de expiração com margem (32 dias)
     const now = new Date();
     const expiresAt = new Date(now);
-    expiresAt.setDate(expiresAt.getDate() + 32);
+    if (subscription.period === 'YEARLY') {
+      expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+      expiresAt.setDate(expiresAt.getDate() + 2); // margem de 2 dias
+    } else {
+      expiresAt.setDate(expiresAt.getDate() + 32); // ~1 mês + 2 dias de margem
+    }
 
     await this.prisma.subscription.update({
       where: { id: subscription.id },
       data: {
         status: 'ACTIVE',
+        asaas_payment_id: paymentId,
         last_payment_at: now,
         current_period_start: now,
         current_period_end: expiresAt,
-      }
+        payment_failed_at: null,
+        payment_failure_reason: null,
+      },
     });
+
+    this.logger.log(`Assinatura ${asaasId} ativada. Usuário: ${subscription.user_id}. Expira: ${expiresAt.toISOString()}`);
 
     await this.prisma.auditLog.create({
       data: {
@@ -348,8 +343,24 @@ export class SubscriptionService {
         action: 'SUBSCRIPTION_ACTIVATED',
         entity: 'Subscription',
         entity_id: subscription.id,
-        details: { asaasId }
-      }
+        details: { asaasId, paymentId, period: subscription.period },
+      },
     });
+  }
+
+  /**
+   * Rebaixa para FREE via webhook PAYMENT_DELETED ou PAYMENT_REFUNDED.
+   */
+  async downgradeByAsaasId(asaasId: string, reason: string) {
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { asaas_id: asaasId },
+    });
+
+    if (!subscription) {
+      this.logger.warn(`Assinatura não encontrada para downgrade. Asaas ID: ${asaasId}`);
+      return;
+    }
+
+    await this.downgradeToFree(subscription.user_id, reason);
   }
 }

@@ -173,6 +173,7 @@ export class ChargesService {
           frequency: dto.recurrence as any,
           next_generation_date: nextGenerationDate,
           active: true,
+          custom_message: dto.custom_message,
           debtors: { create: { debtor_id: debtor.id } },
         },
       });

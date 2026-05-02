@@ -175,6 +175,7 @@ export class ChargesService {
           next_generation_date: nextGenerationDate,
           active: true,
           custom_message: dto.custom_message,
+          max_installments: dto.max_installments ?? null,
           debtors: { create: { debtor_id: debtor.id } },
         },
       });
@@ -374,6 +375,7 @@ export class ChargesService {
       frequency: rule.frequency,
       nextGenerationDate: rule.next_generation_date,
       custom_message: rule.custom_message ?? null,
+      max_installments: rule.max_installments ?? null,
       debtorName: rule.debtors[0]?.debtor.name || 'Vários',
     };
   }
@@ -400,6 +402,7 @@ export class ChargesService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.custom_message !== undefined) data.custom_message = dto.custom_message;
     if (dto.next_generation_date !== undefined) data.next_generation_date = new Date(dto.next_generation_date);
+    if (dto.max_installments !== undefined) data.max_installments = dto.max_installments;
 
     const updated = await this.prisma.recurringCharge.update({
       where: { id: ruleId },
@@ -477,6 +480,7 @@ export class ChargesService {
         next_generation_date: new Date(dto.next_generation_date),
         active: true,
         custom_message: dto.custom_message ?? charge.custom_message,
+        max_installments: dto.max_installments ?? null,
         debtors: { create: { debtor_id: charge.debtor_id } },
       },
     });

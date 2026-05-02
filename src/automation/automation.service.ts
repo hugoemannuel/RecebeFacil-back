@@ -15,13 +15,76 @@ export class AutomationService {
   ) {}
 
   /**
+   * Rotina diária às 00:00 AM
+   * Gera cobranças a partir de regras de recorrência.
+   */
+  @Cron('0 0 * * *')
+  async handleRecurringChargeGeneration() {
+    this.logger.log('Gerando cobranças recorrentes...');
+    const today = startOfDay(new Date());
+
+    const rules = await this.prisma.recurringCharge.findMany({
+      where: { active: true, next_generation_date: { lte: today } },
+      include: {
+        debtors: { include: { debtor: true } },
+        _count: { select: { charges: true } },
+      },
+    });
+
+    for (const rule of rules) {
+      try {
+        const generated = rule._count.charges;
+
+        if (rule.max_installments !== null && generated >= rule.max_installments) {
+          await this.prisma.recurringCharge.update({ where: { id: rule.id }, data: { active: false } });
+          this.logger.log(`Regra ${rule.id} encerrada (${generated}/${rule.max_installments} parcelas).`);
+          continue;
+        }
+
+        for (const { debtor } of rule.debtors) {
+          await this.prisma.charge.create({
+            data: {
+              creditor_id: rule.creditor_id,
+              debtor_id: debtor.id,
+              amount: rule.amount,
+              description: rule.description,
+              due_date: rule.next_generation_date,
+              custom_message: rule.custom_message,
+              status: 'PENDING',
+              recurring_charge_id: rule.id,
+            },
+          });
+        }
+
+        const next = this.calcNextDate(rule.next_generation_date, rule.frequency);
+        await this.prisma.recurringCharge.update({
+          where: { id: rule.id },
+          data: { next_generation_date: next },
+        });
+
+        this.logger.log(`Regra ${rule.id}: parcela ${generated + 1} gerada.`);
+      } catch (err) {
+        this.logger.error(`Erro ao gerar cobrança para regra ${rule.id}:`, err);
+      }
+    }
+  }
+
+  private calcNextDate(from: Date, frequency: string): Date {
+    const d = new Date(from);
+    if (frequency === 'WEEKLY') d.setDate(d.getDate() + 7);
+    else if (frequency === 'MONTHLY') d.setMonth(d.getMonth() + 1);
+    else if (frequency === 'YEARLY') d.setFullYear(d.getFullYear() + 1);
+    return d;
+  }
+
+  /**
    * Rotina diária às 00:30 AM
    * Sincroniza status de faturas e processa automações de mensagens.
    */
   @Cron('30 0 * * *')
   async handleDailyBillingSync() {
     this.logger.log('Iniciando sincronização diária de cobranças (00:30)...');
-    
+
     try {
       const today = startOfDay(new Date());
 

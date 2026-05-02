@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class UpdateRecurringChargeDto {
   @IsOptional()
@@ -16,4 +16,9 @@ export class UpdateRecurringChargeDto {
   @IsOptional()
   @IsString()
   custom_message?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  max_installments?: number;
 }

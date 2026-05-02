@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, IsNotEmpty } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class AutomateChargeDto {
   @IsEnum(['WEEKLY', 'MONTHLY', 'YEARLY'])
@@ -11,4 +11,9 @@ export class AutomateChargeDto {
   @IsOptional()
   @IsString()
   custom_message?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  max_installments?: number;
 }

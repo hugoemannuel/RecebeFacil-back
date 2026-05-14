@@ -14,6 +14,9 @@ describe('UsersService', () => {
       update: jest.fn(),
       create: jest.fn(),
     },
+    subscription: {
+      upsert: jest.fn(),
+    },
     auditLog: {
       create: jest.fn(),
     },
@@ -67,14 +70,10 @@ describe('UsersService', () => {
         is_registered: false,
       });
 
-      mockPrismaService.user.update.mockResolvedValueOnce({
-        id: '1',
-        ...registerDto,
-        password_hash: 'hashed',
-        is_registered: true,
-      });
+      const updatedUser = { id: '1', ...registerDto, password_hash: 'hashed', is_registered: true };
+      mockPrismaService.user.update.mockResolvedValueOnce(updatedUser);
+      mockPrismaService.subscription.upsert.mockResolvedValueOnce({});
 
-      // bcrypt hash is mocked implicitly or not, but it's fine
       const result = await service.registerUser(registerDto);
 
       expect(mockPrismaService.user.update).toHaveBeenCalled();
@@ -84,12 +83,9 @@ describe('UsersService', () => {
     it('should create a new user if not exists', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(null);
 
-      mockPrismaService.user.create.mockResolvedValueOnce({
-        id: '2',
-        ...registerDto,
-        password_hash: 'hashed',
-        is_registered: true,
-      });
+      const newUser = { id: '2', ...registerDto, password_hash: 'hashed', is_registered: true };
+      mockPrismaService.user.create.mockResolvedValueOnce(newUser);
+      mockPrismaService.subscription.upsert.mockResolvedValueOnce({});
 
       const result = await service.registerUser(registerDto);
 

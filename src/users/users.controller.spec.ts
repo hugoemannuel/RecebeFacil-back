@@ -11,6 +11,7 @@ describe('UsersController', () => {
     updateProfile: jest.fn(),
     updatePassword: jest.fn(),
     deleteAccount: jest.fn(),
+    updateAvatar: jest.fn(),
   };
 
   const mockUser = { id: 'user-1', name: 'Test User', email: 'test@example.com', phone: '5511999999999' };
@@ -66,6 +67,18 @@ describe('UsersController', () => {
       mockUsersService.deleteAccount.mockResolvedValue(undefined);
       await controller.deleteAccount(mockReq);
       expect(service.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+    });
+  });
+
+  describe('POST /users/me/avatar', () => {
+    it('deve fazer upload de avatar e retornar URL', async () => {
+      const mockFile = { filename: 'avatar-123.jpg' } as Express.Multer.File;
+      mockUsersService.updateAvatar.mockResolvedValueOnce({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });
+
+      const result = await controller.uploadAvatar(mockReq, mockFile);
+
+      expect(mockUsersService.updateAvatar).toHaveBeenCalledWith('user-1', '/uploads/avatars/avatar-123.jpg');
+      expect(result).toEqual({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });
     });
   });
 });

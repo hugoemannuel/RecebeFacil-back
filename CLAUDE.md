@@ -53,6 +53,7 @@ src/
 - `/backend-security` — IDOR, user enumeration, what to never log
 - `/backend-plan-guard` — PlanGuard, PLAN_MODULES, charge limits
 - `/backend-integrations` — Z-API (WhatsApp) and Asaas (payment gateway)
+- `/backend-testing` — **OBRIGATÓRIO** ao criar/modificar qualquer service, controller, guard ou strategy — padrões Jest, mocks Prisma, cobertura mínima 80%, cenários obrigatórios
 
 ## Key Patterns
 

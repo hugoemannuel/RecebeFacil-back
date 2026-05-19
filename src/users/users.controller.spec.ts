@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -14,13 +15,20 @@ describe('UsersController', () => {
     updateAvatar: jest.fn(),
   };
 
+  const mockSubscriptionService = {
+    cancelSubscription: jest.fn(),
+  };
+
   const mockUser = { id: 'user-1', name: 'Test User', email: 'test@example.com', phone: '5511999999999' };
   const mockReq = { user: { id: 'user-1' }, ip: '127.0.0.1' };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockUsersService }],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+        { provide: SubscriptionService, useValue: mockSubscriptionService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
@@ -63,10 +71,23 @@ describe('UsersController', () => {
   });
 
   describe('DELETE /users/me', () => {
-    it('should call deleteAccount with userId and req.ip', async () => {
+    it('deve cancelar assinatura no Asaas e depois anonimizar a conta', async () => {
+      mockSubscriptionService.cancelSubscription.mockResolvedValue(undefined);
       mockUsersService.deleteAccount.mockResolvedValue(undefined);
+
       await controller.deleteAccount(mockReq);
-      expect(service.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+
+      expect(mockSubscriptionService.cancelSubscription).toHaveBeenCalledWith('user-1');
+      expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+    });
+
+    it('deve anonimizar mesmo quando o cancelamento da assinatura falha', async () => {
+      mockSubscriptionService.cancelSubscription.mockRejectedValue(new Error('sem assinatura'));
+      mockUsersService.deleteAccount.mockResolvedValue(undefined);
+
+      await controller.deleteAccount(mockReq);
+
+      expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
     });
   });
 

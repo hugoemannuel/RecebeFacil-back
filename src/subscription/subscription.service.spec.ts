@@ -23,6 +23,7 @@ describe('SubscriptionService', () => {
 
   const mockAsaasService = {
     createPlanSubscription: jest.fn(),
+    cancelSubscription: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -194,6 +195,27 @@ describe('SubscriptionService', () => {
       expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ action: 'SUBSCRIPTION_CANCELED' }) }),
       );
+    });
+
+    it('deve chamar asaasService.cancelSubscription quando asaas_id existe', async () => {
+      const sub = { id: 'sub-1', status: 'ACTIVE', plan_type: PlanType.PRO, current_period_end: new Date(), asaas_id: 'sub_asaas_1' };
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(sub);
+      mockPrisma.subscription.update.mockResolvedValueOnce({ ...sub, status: 'CANCELED' });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+      mockAsaasService.cancelSubscription.mockResolvedValueOnce(undefined);
+
+      await service.cancelSubscription('user-1');
+      expect(mockAsaasService.cancelSubscription).toHaveBeenCalledWith('sub_asaas_1');
+    });
+
+    it('deve não chamar asaasService.cancelSubscription quando asaas_id ausente', async () => {
+      const sub = { id: 'sub-1', status: 'ACTIVE', plan_type: PlanType.PRO, current_period_end: new Date(), asaas_id: null };
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(sub);
+      mockPrisma.subscription.update.mockResolvedValueOnce({ ...sub, status: 'CANCELED' });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await service.cancelSubscription('user-1');
+      expect(mockAsaasService.cancelSubscription).not.toHaveBeenCalled();
     });
 
     it('deve cancelar assinatura OVERDUE (grace period)', async () => {

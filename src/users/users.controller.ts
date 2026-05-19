@@ -20,13 +20,17 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { UsersService } from './users.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 
 @Controller('users')
 @UseGuards(AuthGuard('jwt'))
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly subscriptionService: SubscriptionService,
+  ) {}
 
   @Get('me')
   async getProfile(@Request() req) {
@@ -46,6 +50,7 @@ export class UsersController {
   @Delete('me')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteAccount(@Request() req) {
+    await this.subscriptionService.cancelSubscription(req.user.id).catch(() => null);
     await this.usersService.deleteAccount(req.user.id, req.ip);
   }
  

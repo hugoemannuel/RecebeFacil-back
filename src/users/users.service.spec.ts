@@ -17,6 +17,9 @@ describe('UsersService', () => {
     subscription: {
       upsert: jest.fn(),
     },
+    creditorProfile: {
+      updateMany: jest.fn(),
+    },
     auditLog: {
       create: jest.fn(),
     },
@@ -169,6 +172,7 @@ describe('UsersService', () => {
         phone: '5511999999999',
       });
       mockPrismaService.user.update.mockResolvedValueOnce({});
+      mockPrismaService.creditorProfile.updateMany.mockResolvedValueOnce({});
       mockPrismaService.auditLog.create.mockResolvedValueOnce({});
 
       await service.deleteAccount('1', '192.168.0.1');
@@ -179,6 +183,13 @@ describe('UsersService', () => {
       expect(updateCall.data.is_registered).toBe(false);
       expect(updateCall.data.email).toContain('@deleted.invalid');
       expect(updateCall.data.phone).not.toBe('5511999999999');
+
+      expect(mockPrismaService.creditorProfile.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { user_id: '1' },
+          data: expect.objectContaining({ document: null, pix_key: null, business_name: null }),
+        }),
+      );
 
       expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({

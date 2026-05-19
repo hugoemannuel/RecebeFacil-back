@@ -18,6 +18,7 @@ describe('AsaasWebhookController', () => {
     activateSubscriptionByAsaasId: jest.fn(),
     recordOverdueByAsaasId: jest.fn(),
     downgradeByAsaasId: jest.fn(),
+    cancelSubscription: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -96,6 +97,28 @@ describe('AsaasWebhookController', () => {
 
       await controller.handleWebhook(body, 'secret-token');
       expect(mockSubscriptionService.downgradeByAsaasId).toHaveBeenCalledWith('sub-asaas-5', 'PAYMENT_REFUNDED');
+    });
+
+    it('deve processar SUBSCRIPTION_DELETED e fazer downgrade', async () => {
+      const body = { event: 'SUBSCRIPTION_DELETED', subscription: { id: 'sub-asaas-6' } };
+      mockSubscriptionService.downgradeByAsaasId.mockResolvedValueOnce(undefined);
+
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockSubscriptionService.downgradeByAsaasId).toHaveBeenCalledWith('sub-asaas-6', 'SUBSCRIPTION_DELETED');
+    });
+
+    it('deve processar SUBSCRIPTION_CANCELED e fazer downgrade', async () => {
+      const body = { event: 'SUBSCRIPTION_CANCELED', subscription: { id: 'sub-asaas-7' } };
+      mockSubscriptionService.downgradeByAsaasId.mockResolvedValueOnce(undefined);
+
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockSubscriptionService.downgradeByAsaasId).toHaveBeenCalledWith('sub-asaas-7', 'SUBSCRIPTION_CANCELED');
+    });
+
+    it('deve não chamar downgrade quando subscription.id ausente em SUBSCRIPTION_DELETED', async () => {
+      const body = { event: 'SUBSCRIPTION_DELETED', subscription: null };
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockSubscriptionService.downgradeByAsaasId).not.toHaveBeenCalled();
     });
 
     it('deve ignorar evento desconhecido e retornar received=true', async () => {

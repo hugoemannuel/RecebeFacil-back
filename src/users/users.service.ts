@@ -111,6 +111,19 @@ export class UsersService {
       },
     });
 
+    await this.prisma.creditorProfile.updateMany({
+      where: { user_id: userId },
+      data: {
+        business_name: null,
+        document: null,
+        pix_key: null,
+        pix_key_type: null,
+        pix_merchant_name: null,
+        pix_qr_code_url: null,
+        logo_url: null,
+      },
+    });
+
     await this.prisma.auditLog.create({
       data: {
         user_id: null,

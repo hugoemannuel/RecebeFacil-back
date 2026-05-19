@@ -10,7 +10,7 @@ import { of, throwError } from 'rxjs';
 describe('AsaasService', () => {
   let service: AsaasService;
 
-  const mockHttpService = { post: jest.fn(), get: jest.fn() };
+  const mockHttpService = { post: jest.fn(), get: jest.fn(), delete: jest.fn() };
   const mockConfigService = {
     get: jest.fn((key: string) => {
       if (key === 'ASAAS_API_URL') return 'https://sandbox.asaas.com/api/v3';
@@ -142,6 +142,25 @@ describe('AsaasService', () => {
       );
 
       await expect(service.createPlanSubscription('user-1', PlanType.STARTER, 'MONTHLY')).rejects.toThrow(HttpException);
+    });
+  });
+
+  // ─── cancelSubscription ───────────────────────────────────────
+  describe('cancelSubscription', () => {
+    it('deve chamar DELETE no Asaas com o asaasId correto', async () => {
+      mockHttpService.delete.mockReturnValueOnce(of({ data: {} }));
+      await service.cancelSubscription('sub_asaas_1');
+      expect(mockHttpService.delete).toHaveBeenCalledWith(
+        expect.stringContaining('/subscriptions/sub_asaas_1'),
+        expect.objectContaining({ headers: expect.any(Object) }),
+      );
+    });
+
+    it('deve não lançar exceção quando Asaas falha (falha silenciosa)', async () => {
+      mockHttpService.delete.mockReturnValueOnce(
+        throwError(() => new Error('Asaas indisponível')),
+      );
+      await expect(service.cancelSubscription('sub_asaas_1')).resolves.toBeUndefined();
     });
   });
 });

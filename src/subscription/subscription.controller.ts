@@ -1,6 +1,7 @@
 import { Controller, Get, Post, UseGuards, Request, Body } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { SubscriptionService } from './subscription.service';
+import { CheckoutDto } from './dto/checkout.dto';
 
 @Controller('subscription')
 @UseGuards(AuthGuard('jwt'))
@@ -18,7 +19,7 @@ export class SubscriptionController {
   }
 
   @Post('checkout')
-  async checkout(@Request() req, @Body() dto: any) {
+  async checkout(@Request() req, @Body() dto: CheckoutDto) {
     return this.subscriptionService.createCheckout(req.user.id, dto.planType, dto.period, dto.document);
   }
 

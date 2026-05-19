@@ -51,6 +51,11 @@ export class AsaasWebhookController {
         await this.handlePaymentReverted(body.payment, event);
         break;
 
+      case 'SUBSCRIPTION_DELETED':
+      case 'SUBSCRIPTION_CANCELED':
+        await this.handleSubscriptionCanceled(body.subscription, event);
+        break;
+
       default:
         this.logger.debug(`Evento ignorado: ${event}`);
     }
@@ -75,6 +80,13 @@ export class AsaasWebhookController {
     const asaasId = payment?.subscription;
     if (!asaasId) return;
     this.logger.warn(`Pagamento revertido (${event}) para assinatura: ${asaasId}`);
+    await this.subscriptionService.downgradeByAsaasId(asaasId, event);
+  }
+
+  private async handleSubscriptionCanceled(subscription: any, event: string) {
+    const asaasId = subscription?.id;
+    if (!asaasId) return;
+    this.logger.warn(`Assinatura cancelada no Asaas (${event}). ID: ${asaasId}`);
     await this.subscriptionService.downgradeByAsaasId(asaasId, event);
   }
 }

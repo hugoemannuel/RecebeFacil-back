@@ -4,6 +4,7 @@ import { ChargesService } from './charges.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { UpdateChargeStatusDto } from './dto/update-charge-status.dto';
+import { AutomateChargeDto } from './dto/automate-charge.dto';
 
 @Controller('charges')
 @UseGuards(AuthGuard('jwt'))
@@ -18,6 +19,11 @@ export class ChargesController {
   @Get('recurring')
   async findAllRecurring(@Request() req) {
     return this.chargesService.findAllRecurring(req.user.id);
+  }
+
+  @Get('recurring/:id')
+  async findOneRecurring(@Request() req, @Param('id') id: string) {
+    return this.chargesService.findOneRecurring(req.user.id, id);
   }
 
   @Get(':id')
@@ -63,6 +69,11 @@ export class ChargesController {
   @Post('recurring/:id/reactivate')
   async reactivateRecurring(@Request() req, @Param('id') id: string) {
     return this.chargesService.reactivateRecurring(req.user.id, id);
+  }
+
+  @Post(':id/automate')
+  async automateCharge(@Request() req, @Param('id') id: string, @Body() dto: AutomateChargeDto) {
+    return this.chargesService.automateCharge(req.user.id, id, dto);
   }
 
   @Patch(':id/status')

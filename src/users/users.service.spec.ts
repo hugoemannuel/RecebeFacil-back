@@ -14,6 +14,12 @@ describe('UsersService', () => {
       update: jest.fn(),
       create: jest.fn(),
     },
+    subscription: {
+      upsert: jest.fn(),
+    },
+    creditorProfile: {
+      updateMany: jest.fn(),
+    },
     auditLog: {
       create: jest.fn(),
     },
@@ -67,14 +73,10 @@ describe('UsersService', () => {
         is_registered: false,
       });
 
-      mockPrismaService.user.update.mockResolvedValueOnce({
-        id: '1',
-        ...registerDto,
-        password_hash: 'hashed',
-        is_registered: true,
-      });
+      const updatedUser = { id: '1', ...registerDto, password_hash: 'hashed', is_registered: true };
+      mockPrismaService.user.update.mockResolvedValueOnce(updatedUser);
+      mockPrismaService.subscription.upsert.mockResolvedValueOnce({});
 
-      // bcrypt hash is mocked implicitly or not, but it's fine
       const result = await service.registerUser(registerDto);
 
       expect(mockPrismaService.user.update).toHaveBeenCalled();
@@ -84,12 +86,9 @@ describe('UsersService', () => {
     it('should create a new user if not exists', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(null);
 
-      mockPrismaService.user.create.mockResolvedValueOnce({
-        id: '2',
-        ...registerDto,
-        password_hash: 'hashed',
-        is_registered: true,
-      });
+      const newUser = { id: '2', ...registerDto, password_hash: 'hashed', is_registered: true };
+      mockPrismaService.user.create.mockResolvedValueOnce(newUser);
+      mockPrismaService.subscription.upsert.mockResolvedValueOnce({});
 
       const result = await service.registerUser(registerDto);
 
@@ -173,6 +172,7 @@ describe('UsersService', () => {
         phone: '5511999999999',
       });
       mockPrismaService.user.update.mockResolvedValueOnce({});
+      mockPrismaService.creditorProfile.updateMany.mockResolvedValueOnce({});
       mockPrismaService.auditLog.create.mockResolvedValueOnce({});
 
       await service.deleteAccount('1', '192.168.0.1');
@@ -183,6 +183,13 @@ describe('UsersService', () => {
       expect(updateCall.data.is_registered).toBe(false);
       expect(updateCall.data.email).toContain('@deleted.invalid');
       expect(updateCall.data.phone).not.toBe('5511999999999');
+
+      expect(mockPrismaService.creditorProfile.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { user_id: '1' },
+          data: expect.objectContaining({ document: null, pix_key: null, business_name: null }),
+        }),
+      );
 
       expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({

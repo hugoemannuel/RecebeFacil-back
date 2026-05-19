@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, Min, IsEnum, IsBoolean, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsInt, Min, IsEnum, IsBoolean, IsOptional, MaxLength } from 'class-validator';
 
 export class CreateChargeDto {
   @IsString()
@@ -47,5 +47,10 @@ export class CreateChargeDto {
   @IsOptional()
   @IsString()
   template_name?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  max_installments?: number;
 }
 

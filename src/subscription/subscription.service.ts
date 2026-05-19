@@ -146,6 +146,10 @@ export class SubscriptionService {
       data: { status: 'CANCELED' },
     });
 
+    if (subscription.asaas_id) {
+      await this.asaasService.cancelSubscription(subscription.asaas_id);
+    }
+
     await this.prisma.auditLog.create({
       data: {
         user_id: userId,

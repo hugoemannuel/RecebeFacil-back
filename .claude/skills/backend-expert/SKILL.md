@@ -373,11 +373,30 @@ await this.prisma.subscription.upsert({
 
 ## Testes (TDD — regra inegociável)
 
-Todo `*.service.ts`, `*.controller.ts`, `*.guard.ts` → arquivo `*.spec.ts` correspondente.
+**Invocar `/backend-testing` sempre que criar ou modificar qualquer arquivo de produção.**
 
-**Cenários obrigatórios:** happy path · sem assinatura (FREE) · CANCELED/PAST_DUE → FREE · acesso negado a módulo premium · idempotência (mesma ação duas vezes não duplica).
+Todo `*.service.ts`, `*.controller.ts`, `*.guard.ts`, `*.strategy.ts` → arquivo `*.spec.ts` correspondente, criado **na mesma sessão**, antes de reportar a tarefa como concluída.
 
-**Mocks obrigatórios:** PrismaService · JwtService · Z-API · Asaas.
+**Cobertura mínima: 80% global. Meta: 100%.** Thresholds configurados no `jest` do `package.json` — `npm run test:cov` falha o build se não atingidos.
+
+**Cenários obrigatórios em todo spec:**
+- Caminho feliz (input válido → resultado correto)
+- Recurso não encontrado → `ForbiddenException` (nunca 404)
+- IDOR: acesso a recurso de outro usuário → `ForbiddenException`
+- Plano FREE / sem assinatura → rejeita ação premium
+- CANCELED/PAST_DUE → tratado como FREE
+- Limite de cobranças atingido → `LIMIT_REACHED`
+- Recorrência não permitida pelo plano → `RECURRENCE_NOT_ALLOWED`
+- Idempotência (mesma ação duas vezes não duplica)
+- Ações críticas criam `AuditLog`
+
+**Mocks obrigatórios:** PrismaService (modelo inteiro) · JwtService · Z-API (HttpService) · Asaas · bcrypt (`jest.mock('bcrypt')`).
+
+**Padrão de isolamento:**
+```typescript
+afterEach(() => jest.clearAllMocks()); // obrigatório em todo describe
+// Usar mockResolvedValueOnce (não mockResolvedValue) para evitar contaminação
+```
 
 ---
 

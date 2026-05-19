@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
+import { AutomateChargeDto } from './dto/automate-charge.dto';
 import { PixKeyType } from '@prisma/client';
 import { canSaveMoreTemplates } from '../common/plan-modules';
 
@@ -173,6 +174,8 @@ export class ChargesService {
           frequency: dto.recurrence as any,
           next_generation_date: nextGenerationDate,
           active: true,
+          custom_message: dto.custom_message,
+          max_installments: dto.max_installments ?? null,
           debtors: { create: { debtor_id: debtor.id } },
         },
       });
@@ -358,6 +361,25 @@ export class ChargesService {
     return { success: true, count: validIds.length };
   }
  
+  async findOneRecurring(userId: string, ruleId: string) {
+    const rule = await this.prisma.recurringCharge.findUnique({
+      where: { id: ruleId },
+      include: { debtors: { include: { debtor: true } } },
+    });
+    if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();
+
+    return {
+      id: rule.id,
+      amount: rule.amount,
+      description: rule.description,
+      frequency: rule.frequency,
+      nextGenerationDate: rule.next_generation_date,
+      custom_message: rule.custom_message ?? null,
+      max_installments: rule.max_installments ?? null,
+      debtorName: rule.debtors[0]?.debtor.name || 'Vários',
+    };
+  }
+
   async cancelRecurring(userId: string, ruleId: string) {
     const rule = await this.prisma.recurringCharge.findUnique({ where: { id: ruleId } });
     if (!rule || rule.creditor_id !== userId) throw new ForbiddenException();
@@ -380,6 +402,7 @@ export class ChargesService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.custom_message !== undefined) data.custom_message = dto.custom_message;
     if (dto.next_generation_date !== undefined) data.next_generation_date = new Date(dto.next_generation_date);
+    if (dto.max_installments !== undefined) data.max_installments = dto.max_installments;
 
     const updated = await this.prisma.recurringCharge.update({
       where: { id: ruleId },
@@ -438,5 +461,44 @@ export class ChargesService {
     });
 
     return { success: true };
+  }
+
+  async automateCharge(userId: string, chargeId: string, dto: AutomateChargeDto) {
+    const charge = await this.prisma.charge.findUnique({
+      where: { id: chargeId },
+      include: { debtor: true },
+    });
+    if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
+    if (charge.recurring_charge_id) throw new ForbiddenException('Cobrança já possui automação configurada.');
+
+    const recurringCharge = await this.prisma.recurringCharge.create({
+      data: {
+        creditor_id: userId,
+        amount: charge.amount,
+        description: charge.description,
+        frequency: dto.frequency as any,
+        next_generation_date: new Date(dto.next_generation_date),
+        active: true,
+        custom_message: dto.custom_message ?? charge.custom_message,
+        max_installments: dto.max_installments ?? null,
+        debtors: { create: { debtor_id: charge.debtor_id } },
+      },
+    });
+
+    await this.prisma.charge.update({
+      where: { id: chargeId },
+      data: { recurring_charge_id: recurringCharge.id },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'RECURRING_CHARGE_CREATED',
+        entity: 'RecurringCharge',
+        entity_id: recurringCharge.id,
+      },
+    });
+
+    return { success: true, recurringChargeId: recurringCharge.id };
   }
 }

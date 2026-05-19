@@ -63,7 +63,7 @@ export class AsaasService {
       notificationDisabled: false,
     };
 
-    this.logger.log(`Criando cliente no Asaas: ${JSON.stringify(customerPayload)}`);
+    this.logger.log(`Criando cliente no Asaas. externalReference: ${user.id}`);
 
     try {
       const response = await firstValueFrom(
@@ -116,7 +116,7 @@ export class AsaasService {
       description: `Plano RecebeFácil: ${planType} (${period})`,
     };
 
-    this.logger.log(`Criando assinatura ${planType} para o cliente ${customerId} com payload: ${JSON.stringify(payload)}`);
+    this.logger.log(`Criando assinatura ${planType} para o cliente ${customerId}. Período: ${period}`);
 
     try {
       const response = await firstValueFrom(
@@ -127,7 +127,7 @@ export class AsaasService {
         ),
       );
 
-      this.logger.log(`Resposta do Asaas (Subscription): ${JSON.stringify(response.data)}`);
+      this.logger.log(`Assinatura criada no Asaas. ID: ${response.data.id}, status: ${response.data.status}`);
 
       let paymentUrl = response.data.invoiceUrl || 
                        response.data.checkoutUrl || 
@@ -160,6 +160,18 @@ export class AsaasService {
       const asaasError = error.response?.data?.errors?.[0]?.description || error.message;
       this.logger.error(`Erro ao criar assinatura no Asaas: ${asaasError}`, error.response?.data);
       throw new HttpException(`Erro no Asaas: ${asaasError}`, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
+  async cancelSubscription(asaasId: string): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.httpService.delete(`${this.baseUrl}/subscriptions/${asaasId}`, { headers: this.headers }),
+      );
+      this.logger.log(`Assinatura ${asaasId} cancelada no Asaas.`);
+    } catch (error) {
+      // Não bloqueia o fluxo — a anonimização segue mesmo se o Asaas falhar
+      this.logger.warn(`Falha ao cancelar assinatura ${asaasId} no Asaas: ${error.message}`);
     }
   }
 }

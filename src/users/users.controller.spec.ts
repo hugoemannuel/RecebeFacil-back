@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -11,6 +12,11 @@ describe('UsersController', () => {
     updateProfile: jest.fn(),
     updatePassword: jest.fn(),
     deleteAccount: jest.fn(),
+    updateAvatar: jest.fn(),
+  };
+
+  const mockSubscriptionService = {
+    cancelSubscription: jest.fn(),
   };
 
   const mockUser = { id: 'user-1', name: 'Test User', email: 'test@example.com', phone: '5511999999999' };
@@ -19,7 +25,10 @@ describe('UsersController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockUsersService }],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+        { provide: SubscriptionService, useValue: mockSubscriptionService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
@@ -62,10 +71,35 @@ describe('UsersController', () => {
   });
 
   describe('DELETE /users/me', () => {
-    it('should call deleteAccount with userId and req.ip', async () => {
+    it('deve cancelar assinatura no Asaas e depois anonimizar a conta', async () => {
+      mockSubscriptionService.cancelSubscription.mockResolvedValue(undefined);
       mockUsersService.deleteAccount.mockResolvedValue(undefined);
+
       await controller.deleteAccount(mockReq);
-      expect(service.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+
+      expect(mockSubscriptionService.cancelSubscription).toHaveBeenCalledWith('user-1');
+      expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+    });
+
+    it('deve anonimizar mesmo quando o cancelamento da assinatura falha', async () => {
+      mockSubscriptionService.cancelSubscription.mockRejectedValue(new Error('sem assinatura'));
+      mockUsersService.deleteAccount.mockResolvedValue(undefined);
+
+      await controller.deleteAccount(mockReq);
+
+      expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
+    });
+  });
+
+  describe('POST /users/me/avatar', () => {
+    it('deve fazer upload de avatar e retornar URL', async () => {
+      const mockFile = { filename: 'avatar-123.jpg' } as Express.Multer.File;
+      mockUsersService.updateAvatar.mockResolvedValueOnce({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });
+
+      const result = await controller.uploadAvatar(mockReq, mockFile);
+
+      expect(mockUsersService.updateAvatar).toHaveBeenCalledWith('user-1', '/uploads/avatars/avatar-123.jpg');
+      expect(result).toEqual({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });
     });
   });
 });

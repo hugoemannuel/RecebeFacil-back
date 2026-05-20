@@ -10,6 +10,9 @@ describe('IntegrationsController', () => {
     acknowledgeSplitTerms: jest.fn(),
     getAutomationConfig: jest.fn(),
     updateAutomationConfig: jest.fn(),
+    getZapiConfig: jest.fn(),
+    updateZapiConfig: jest.fn(),
+    disconnectZapi: jest.fn(),
   };
 
   const req = { user: { id: 'user-1' } };
@@ -49,5 +52,24 @@ describe('IntegrationsController', () => {
     mockService.updateAutomationConfig.mockResolvedValueOnce({});
     await controller.updateAutomation(req as any, dto);
     expect(mockService.updateAutomationConfig).toHaveBeenCalledWith('user-1', dto);
+  });
+
+  it('getZapi delega para service', async () => {
+    mockService.getZapiConfig.mockResolvedValueOnce({ has_credentials: true });
+    await controller.getZapi(req as any);
+    expect(mockService.getZapiConfig).toHaveBeenCalledWith('user-1');
+  });
+
+  it('updateZapi delega para service com userId e dto', async () => {
+    const dto: any = { instance_id: 'i1', instance_token: 't1' };
+    mockService.updateZapiConfig.mockResolvedValueOnce({});
+    await controller.updateZapi(req as any, dto);
+    expect(mockService.updateZapiConfig).toHaveBeenCalledWith('user-1', dto);
+  });
+
+  it('disconnectZapi delega para service', async () => {
+    mockService.disconnectZapi.mockResolvedValueOnce({});
+    await controller.disconnectZapi(req as any);
+    expect(mockService.disconnectZapi).toHaveBeenCalledWith('user-1');
   });
 });

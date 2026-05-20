@@ -118,6 +118,49 @@ describe('IntegrationsService', () => {
     });
   });
 
+  // ─── getZapiConfig ───────────────────────────────────────────
+  describe('getZapiConfig', () => {
+    it('deve retornar has_credentials true quando ambas credenciais configuradas', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        zapi_instance_id: 'inst-1',
+        zapi_instance_token: 'tok-1',
+      });
+      const result = await service.getZapiConfig('user-1');
+      expect(result.has_credentials).toBe(true);
+      expect(result.zapi_instance_id).toBe('inst-1');
+      expect(result.has_token).toBe(true);
+    });
+
+    it('deve retornar has_credentials false quando config não existe', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce(null);
+      const result = await service.getZapiConfig('user-1');
+      expect(result.has_credentials).toBe(false);
+      expect(result.zapi_instance_id).toBeNull();
+    });
+  });
+
+  // ─── updateZapiConfig ────────────────────────────────────────
+  describe('updateZapiConfig', () => {
+    it('deve fazer upsert com instance_id e instance_token', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+      await service.updateZapiConfig('user-1', { instance_id: 'i1', instance_token: 't1' });
+      const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
+      expect(call.update.zapi_instance_id).toBe('i1');
+      expect(call.update.zapi_instance_token).toBe('t1');
+    });
+  });
+
+  // ─── disconnectZapi ──────────────────────────────────────────
+  describe('disconnectZapi', () => {
+    it('deve limpar credenciais Z-API', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+      await service.disconnectZapi('user-1');
+      const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
+      expect(call.update.zapi_instance_id).toBeNull();
+      expect(call.update.zapi_instance_token).toBeNull();
+    });
+  });
+
   // ─── updateAutomationConfig ───────────────────────────────────
   describe('updateAutomationConfig', () => {
     it('deve fazer upsert da configuração', async () => {

@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { TriggerType } from '@prisma/client';
 import { startOfDay } from 'date-fns';
 import { PrismaService } from '../prisma/prisma.service';
-import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
 import { PgBossService, NOTIFICATION_QUEUE } from './pg-boss.service';
 
 export interface NotificationJobData {
@@ -43,6 +43,7 @@ export class NotificationWorker implements OnApplicationBootstrap {
         creditor: {
           include: {
             creditor_profile: { include: { message_templates: true } },
+            integration_config: true,
           },
         },
       },
@@ -65,8 +66,18 @@ export class NotificationWorker implements OnApplicationBootstrap {
 
     const message = this.buildMessage(charge, trigger);
 
+    const integrationConfig = charge.creditor.integration_config;
+    const credentials: ZApiCredentials | undefined =
+      integrationConfig?.zapi_instance_id && integrationConfig?.zapi_instance_token
+        ? {
+            instanceId:  integrationConfig.zapi_instance_id,
+            token:       integrationConfig.zapi_instance_token,
+            clientToken: process.env.ZAPI_CLIENT_TOKEN ?? '',
+          }
+        : undefined;
+
     try {
-      await this.whatsapp.sendText(charge.debtor.phone, message);
+      await this.whatsapp.sendText(charge.debtor.phone, message, credentials);
       await this.prisma.messageHistory.create({
         data: { charge_id: chargeId, trigger_type: TriggerType.MANUAL, status: 'SENT' },
       });

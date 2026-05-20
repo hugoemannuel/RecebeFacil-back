@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
 import { MessageTrigger, TriggerType } from '@prisma/client';
 import { addDays, differenceInCalendarDays, endOfDay, startOfDay } from 'date-fns';
 
@@ -197,8 +197,18 @@ export class AutomationService {
 
     const message = this.buildAutomaticMessage(charge, trigger, template?.body);
 
+    const integrationConfig = charge.creditor.integration_config;
+    const credentials: ZApiCredentials | undefined =
+      integrationConfig?.zapi_instance_id && integrationConfig?.zapi_instance_token
+        ? {
+            instanceId:  integrationConfig.zapi_instance_id,
+            token:       integrationConfig.zapi_instance_token,
+            clientToken: process.env.ZAPI_CLIENT_TOKEN ?? '',
+          }
+        : undefined;
+
     try {
-      await this.whatsapp.sendText(charge.debtor.phone, message);
+      await this.whatsapp.sendText(charge.debtor.phone, message, credentials);
       await this.prisma.messageHistory.create({
         data: {
           charge_id: charge.id,

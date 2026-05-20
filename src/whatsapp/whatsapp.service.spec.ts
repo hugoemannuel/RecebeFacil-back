@@ -64,5 +64,38 @@ describe('WhatsAppService', () => {
       delete process.env.ZAPI_INSTANCE_TOKEN;
       delete process.env.ZAPI_CLIENT_TOKEN;
     });
+
+    it('deve usar credenciais explícitas quando fornecidas (multitenancy)', async () => {
+      delete process.env.ZAPI_INSTANCE_ID;
+      mockFetch.mockResolvedValueOnce({ ok: true });
+
+      const credentials = { instanceId: 'lojista-inst', token: 'lojista-tok', clientToken: 'cli-tok' };
+      await service.sendText('5511999', 'Msg', credentials);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('lojista-inst'),
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'Client-Token': 'cli-tok' }),
+        }),
+      );
+    });
+
+    it('deve usar env vars como fallback quando credenciais não fornecidas', async () => {
+      process.env.ZAPI_INSTANCE_ID = 'env-inst';
+      process.env.ZAPI_INSTANCE_TOKEN = 'env-tok';
+      process.env.ZAPI_CLIENT_TOKEN = 'env-cli';
+
+      mockFetch.mockResolvedValueOnce({ ok: true });
+      await service.sendText('5511999', 'Msg');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('env-inst'),
+        expect.any(Object),
+      );
+
+      delete process.env.ZAPI_INSTANCE_ID;
+      delete process.env.ZAPI_INSTANCE_TOKEN;
+      delete process.env.ZAPI_CLIENT_TOKEN;
+    });
   });
 });

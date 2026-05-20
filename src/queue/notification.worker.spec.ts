@@ -30,6 +30,7 @@ describe('NotificationWorker', () => {
         pix_key: 'empresa@pix.com',
         message_templates: [],
       },
+      integration_config: null,
     },
     ...overrides,
   });
@@ -75,7 +76,7 @@ describe('NotificationWorker', () => {
 
       await worker.handle(jobData);
 
-      expect(mockWhatsapp.sendText).toHaveBeenCalledWith('5511999999999', expect.any(String));
+      expect(mockWhatsapp.sendText).toHaveBeenCalledWith('5511999999999', expect.any(String), undefined);
       expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ trigger_type: TriggerType.MANUAL, status: 'SENT' }),
       });
@@ -115,6 +116,28 @@ describe('NotificationWorker', () => {
       expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
     });
 
+    it('deve passar credenciais do lojista quando integration_config configurado', async () => {
+      const chargeWithCreds = makeCharge({
+        creditor: {
+          name: 'Empresa X',
+          creditor_profile: { business_name: 'Empresa X', pix_key: 'pix', message_templates: [] },
+          integration_config: { zapi_instance_id: 'loj-inst', zapi_instance_token: 'loj-tok' },
+        },
+      });
+      mockPrisma.charge.findUnique.mockResolvedValueOnce(chargeWithCreds);
+      mockPrisma.messageHistory.findFirst.mockResolvedValueOnce(null);
+      mockWhatsapp.sendText.mockResolvedValueOnce(undefined);
+      mockPrisma.messageHistory.create.mockResolvedValueOnce({});
+
+      await worker.handle(jobData);
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledWith(
+        '5511999999999',
+        expect.any(String),
+        expect.objectContaining({ instanceId: 'loj-inst', token: 'loj-tok' }),
+      );
+    });
+
     it('deve usar template personalizado quando disponível', async () => {
       const chargeWithTemplate = makeCharge({
         creditor: {
@@ -138,6 +161,7 @@ describe('NotificationWorker', () => {
       expect(mockWhatsapp.sendText).toHaveBeenCalledWith(
         '5511999999999',
         expect.stringContaining('João Silva'),
+        undefined,
       );
     });
   });

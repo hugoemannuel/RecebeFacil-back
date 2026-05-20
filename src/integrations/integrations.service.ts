@@ -140,6 +140,38 @@ export class IntegrationsService {
     };
   }
 
+  async getZapiConfig(userId: string) {
+    const config = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
+    return {
+      zapi_instance_id: config?.zapi_instance_id ?? null,
+      has_token: !!(config?.zapi_instance_token),
+      has_credentials: !!(config?.zapi_instance_id && config?.zapi_instance_token),
+    };
+  }
+
+  async updateZapiConfig(userId: string, data: { instance_id: string; instance_token: string }) {
+    return this.prisma.integrationConfig.upsert({
+      where: { user_id: userId },
+      update: {
+        zapi_instance_id: data.instance_id,
+        zapi_instance_token: data.instance_token,
+      },
+      create: {
+        user_id: userId,
+        zapi_instance_id: data.instance_id,
+        zapi_instance_token: data.instance_token,
+      },
+    });
+  }
+
+  async disconnectZapi(userId: string) {
+    return this.prisma.integrationConfig.upsert({
+      where: { user_id: userId },
+      update: { zapi_instance_id: null, zapi_instance_token: null },
+      create: { user_id: userId },
+    });
+  }
+
   async updateAutomationConfig(userId: string, data: {
     allows_automation?: boolean;
     automation_days_before?: number;

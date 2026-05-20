@@ -1,13 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+export interface ZApiCredentials {
+  instanceId: string;
+  token: string;
+  clientToken: string;
+}
+
 @Injectable()
 export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
 
-  async sendText(phone: string, message: string): Promise<void> {
-    const instanceId = process.env.ZAPI_INSTANCE_ID;
-    const token = process.env.ZAPI_INSTANCE_TOKEN;
-    const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+  async sendText(phone: string, message: string, credentials?: ZApiCredentials): Promise<void> {
+    const instanceId  = credentials?.instanceId  ?? process.env.ZAPI_INSTANCE_ID;
+    const token       = credentials?.token       ?? process.env.ZAPI_INSTANCE_TOKEN;
+    const clientToken = credentials?.clientToken ?? process.env.ZAPI_CLIENT_TOKEN;
 
     if (!instanceId || !token || !clientToken) {
       this.logger.warn(`[mock] sendText → ${phone}: ${message.slice(0, 60)}...`);

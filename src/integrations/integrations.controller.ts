@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, UseGuards, Req, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req, Patch, Delete, HttpCode, HttpStatus } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
+import { UpdateZapiDto } from './dto/update-zapi.dto';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -17,6 +18,25 @@ export class IntegrationsController {
   @Post('asaas/acknowledge-split')
   async acknowledgeSplit(@Req() req, @Body() data: any) {
     return await this.integrationsService.acknowledgeSplitTerms(req.user.id, data);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('zapi')
+  async getZapi(@Req() req) {
+    return this.integrationsService.getZapiConfig(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('zapi')
+  async updateZapi(@Req() req, @Body() dto: UpdateZapiDto) {
+    return this.integrationsService.updateZapiConfig(req.user.id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('zapi')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async disconnectZapi(@Req() req) {
+    await this.integrationsService.disconnectZapi(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard)

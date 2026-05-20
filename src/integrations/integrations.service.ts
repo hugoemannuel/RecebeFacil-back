@@ -189,6 +189,14 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
     return config;
   }
 
+  async getSplitStatus(userId: string): Promise<{ accepted: boolean }> {
+    const config = await this.prisma.integrationConfig.findUnique({
+      where: { user_id: userId },
+      select: { split_terms_accepted_at: true },
+    });
+    return { accepted: !!config?.split_terms_accepted_at };
+  }
+
   async getAutomationConfig(userId: string) {
     const config = await this.prisma.integrationConfig.findUnique({
       where: { user_id: userId },

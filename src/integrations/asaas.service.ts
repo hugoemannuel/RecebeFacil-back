@@ -177,6 +177,69 @@ export class AsaasService {
     }
   }
 
+  /**
+   * Cria um pagamento avulso no Asaas para cobrança intermediada.
+   * O externalReference é o ID interno da cobrança para reconciliação no webhook.
+   */
+  async createIntermediatedPayment(data: {
+    debtorName: string;
+    debtorPhone: string;
+    amountCentavos: number;
+    dueDate: Date;
+    description: string;
+    chargeId: string;
+  }): Promise<{ asaasPaymentId: string; invoiceUrl: string }> {
+    // 1. Criar cliente devedor no Asaas
+    let debtorCustomerId: string;
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/customers`,
+          {
+            name: data.debtorName,
+            mobilePhone: data.debtorPhone,
+            externalReference: `debtor_${data.chargeId}`,
+            notificationDisabled: true,
+          },
+          { headers: this.headers },
+        ),
+      );
+      debtorCustomerId = resp.data.id;
+      this.logger.log(`Cliente devedor criado no Asaas: ${debtorCustomerId}`);
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar cliente devedor no Asaas';
+      this.logger.error(`Erro ao criar cliente devedor: ${msg}`);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+
+    // 2. Criar cobrança avulsa
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/payments`,
+          {
+            customer: debtorCustomerId,
+            billingType: 'UNDEFINED',
+            value: data.amountCentavos / 100,
+            dueDate: data.dueDate.toISOString().split('T')[0],
+            description: data.description,
+            externalReference: data.chargeId,
+            notificationDisabled: false,
+          },
+          { headers: this.headers },
+        ),
+      );
+      const payment = resp.data;
+      const invoiceUrl = payment.invoiceUrl || payment.bankSlipUrl || payment.checkoutUrl || '';
+      this.logger.log(`Pagamento intermediado criado: ${payment.id}`);
+      return { asaasPaymentId: payment.id, invoiceUrl };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar cobrança no Asaas';
+      this.logger.error(`Erro ao criar pagamento intermediado: ${msg}`);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
   async cancelSubscription(asaasId: string): Promise<void> {
     try {
       await firstValueFrom(

@@ -52,5 +52,9 @@ export class CreateChargeDto {
   @IsInt()
   @Min(1)
   max_installments?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  is_intermediated?: boolean;
 }
 

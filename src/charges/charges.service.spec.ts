@@ -4,6 +4,7 @@ import { ChargesService } from './charges.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { PgBossService } from '../queue/pg-boss.service';
+import { AsaasService } from '../integrations/asaas.service';
 
 describe('ChargesService', () => {
   let service: ChargesService;
@@ -31,10 +32,12 @@ describe('ChargesService', () => {
     messageTemplate: { count: jest.fn(), create: jest.fn() },
     messageHistory: { create: jest.fn(), findFirst: jest.fn() },
     auditLog: { create: jest.fn() },
+    integrationConfig: { findUnique: jest.fn() },
   };
 
   const mockClientsService = { upsertFromCharge: jest.fn() };
   const mockPgBoss = { send: jest.fn().mockResolvedValue('job-id-1') };
+  const mockAsaas = { createIntermediatedPayment: jest.fn() };
 
   const activeSub = { plan_type: 'PRO', status: 'ACTIVE' };
 
@@ -45,6 +48,7 @@ describe('ChargesService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ClientsService, useValue: mockClientsService },
         { provide: PgBossService, useValue: mockPgBoss },
+        { provide: AsaasService, useValue: mockAsaas },
       ],
     }).compile();
     service = module.get<ChargesService>(ChargesService);
@@ -208,6 +212,92 @@ describe('ChargesService', () => {
         ...dto, send_pix_button: true, pix_key: '123456', pix_key_type: 'CPF',
       });
       expect(mockPrisma.creditorProfile.upsert).toHaveBeenCalled();
+    });
+
+    // ─── split / intermediação ─────────────────────────────────────
+    it('deve lançar SPLIT_PLAN_REQUIRED para plano FREE com is_intermediated', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ plan_type: 'FREE', status: 'ACTIVE' });
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      await expect(service.createCharge('user-1', { ...dto, is_intermediated: true }))
+        .rejects.toThrow('SPLIT_PLAN_REQUIRED');
+    });
+
+    it('deve lançar SPLIT_PLAN_REQUIRED para plano STARTER com is_intermediated', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ plan_type: 'STARTER', status: 'ACTIVE' });
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      await expect(service.createCharge('user-1', { ...dto, is_intermediated: true }))
+        .rejects.toThrow('SPLIT_PLAN_REQUIRED');
+    });
+
+    it('deve lançar SPLIT_TERMS_NOT_ACCEPTED quando termos não foram aceitos', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ split_terms_accepted_at: null });
+      await expect(service.createCharge('user-1', { ...dto, is_intermediated: true }))
+        .rejects.toThrow('SPLIT_TERMS_NOT_ACCEPTED');
+    });
+
+    it('deve criar cobrança intermediada e retornar asaas_invoice_url (plano PRO, taxa 2%)', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ split_terms_accepted_at: new Date() });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'debtor-1', name: 'Ana', phone: '5511999' });
+      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'charge-split' });
+      mockAsaas.createIntermediatedPayment.mockResolvedValueOnce({
+        asaasPaymentId: 'pay_001',
+        invoiceUrl: 'https://asaas.com/c/pay_001',
+      });
+      mockPrisma.charge.update.mockResolvedValueOnce({});
+      mockPrisma.messageHistory.create.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValue({});
+      mockClientsService.upsertFromCharge.mockResolvedValueOnce({});
+
+      const result = await service.createCharge('user-1', { ...dto, is_intermediated: true });
+
+      expect(mockAsaas.createIntermediatedPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ chargeId: 'charge-split', amountCentavos: 10000 }),
+      );
+      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ is_intermediated: true, platform_fee_pct: 2.0 }),
+        }),
+      );
+      expect(result.asaas_invoice_url).toBe('https://asaas.com/c/pay_001');
+    });
+
+    it('deve usar taxa 1% para plano UNLIMITED', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ plan_type: 'UNLIMITED', status: 'ACTIVE' });
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ split_terms_accepted_at: new Date() });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'debtor-1', name: 'Ana', phone: '5511999' });
+      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'charge-unlimited' });
+      mockAsaas.createIntermediatedPayment.mockResolvedValueOnce({ asaasPaymentId: 'p2', invoiceUrl: 'https://url' });
+      mockPrisma.charge.update.mockResolvedValueOnce({});
+      mockPrisma.messageHistory.create.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValue({});
+      mockClientsService.upsertFromCharge.mockResolvedValueOnce({});
+
+      await service.createCharge('user-1', { ...dto, is_intermediated: true });
+
+      expect(mockPrisma.charge.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ platform_fee_pct: 1.0 }),
+        }),
+      );
+    });
+
+    it('deve deletar cobrança e re-lançar se Asaas falhar', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ split_terms_accepted_at: new Date() });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'debtor-1', name: 'Ana', phone: '5511999' });
+      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'charge-fail' });
+      mockAsaas.createIntermediatedPayment.mockRejectedValueOnce(new Error('Asaas indisponível'));
+      mockPrisma.charge.delete.mockResolvedValueOnce({});
+
+      await expect(service.createCharge('user-1', { ...dto, is_intermediated: true }))
+        .rejects.toThrow('Asaas indisponível');
+      expect(mockPrisma.charge.delete).toHaveBeenCalledWith({ where: { id: 'charge-fail' } });
     });
   });
 

@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
+import { AsaasService } from '../integrations/asaas.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { AutomateChargeDto } from './dto/automate-charge.dto';
@@ -15,6 +16,7 @@ export class ChargesService {
     private prisma: PrismaService,
     private clientsService: ClientsService,
     private pgBoss: PgBossService,
+    private asaasService: AsaasService,
   ) {}
 
   async findAll(userId: string) {
@@ -39,6 +41,8 @@ export class ChargesService {
       recurrence: charge.recurring_charge?.frequency ?? 'ONCE',
       automationEnabled: !!charge.recurring_charge_id,
       recurringChargeId: charge.recurring_charge_id ?? null,
+      is_intermediated: charge.is_intermediated,
+      asaas_invoice_url: charge.asaas_invoice_url ?? null,
     }));
   }
 
@@ -122,6 +126,17 @@ export class ChargesService {
       throw new ForbiddenException('LIMIT_REACHED');
     }
 
+    // 1.5 Validate split prerequisites
+    if (dto.is_intermediated) {
+      if (!['PRO', 'UNLIMITED'].includes(subscription.plan_type)) {
+        throw new ForbiddenException('SPLIT_PLAN_REQUIRED');
+      }
+      const integrationConfig = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
+      if (!integrationConfig?.split_terms_accepted_at) {
+        throw new ForbiddenException('SPLIT_TERMS_NOT_ACCEPTED');
+      }
+    }
+
     // 2. Update Creditor Profile if Pix Key was provided inline
     if (dto.send_pix_button && dto.pix_key && dto.pix_key_type) {
       await this.prisma.creditorProfile.upsert({
@@ -198,6 +213,35 @@ export class ChargesService {
       },
     });
 
+    // 4.5 Create Asaas payment if intermediated
+    let asaasInvoiceUrl: string | undefined;
+    if (dto.is_intermediated) {
+      const platformFeePct = subscription.plan_type === 'UNLIMITED' ? 1.0 : 2.0;
+      try {
+        const asaasResult = await this.asaasService.createIntermediatedPayment({
+          debtorName: debtor.name,
+          debtorPhone: debtor.phone,
+          amountCentavos: dto.amount,
+          dueDate: new Date(dto.due_date),
+          description: dto.description,
+          chargeId: charge.id,
+        });
+        await this.prisma.charge.update({
+          where: { id: charge.id },
+          data: {
+            is_intermediated: true,
+            platform_fee_pct: platformFeePct,
+            asaas_payment_id: asaasResult.asaasPaymentId,
+            asaas_invoice_url: asaasResult.invoiceUrl,
+          },
+        });
+        asaasInvoiceUrl = asaasResult.invoiceUrl;
+      } catch (e) {
+        await this.prisma.charge.delete({ where: { id: charge.id } });
+        throw e;
+      }
+    }
+
     // 5. Create MessageHistory
     await this.prisma.messageHistory.create({
       data: {
@@ -244,10 +288,7 @@ export class ChargesService {
     // Mantém a lista de clientes sincronizada
     await this.clientsService.upsertFromCharge(userId, debtor.id);
 
-    // Em um sistema real, aqui chamaria um serviço em background/filas (Ex: BullMQ)
-    // para disparar a API da Z-API caso o plano permita e o status seja PENDING
-
-    return { success: true, chargeId: charge.id };
+    return { success: true, chargeId: charge.id, ...(asaasInvoiceUrl ? { asaas_invoice_url: asaasInvoiceUrl } : {}) };
   }
 
   async updateChargeStatus(userId: string, chargeId: string, status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELED') {

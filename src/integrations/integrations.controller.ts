@@ -9,6 +9,12 @@ export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get('split-status')
+  async getSplitStatus(@Req() req) {
+    return this.integrationsService.getSplitStatus(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('asaas/split-terms')
   async getSplitTerms() {
     return await this.integrationsService.getSplitTerms();

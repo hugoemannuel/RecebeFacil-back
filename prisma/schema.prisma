@@ -246,7 +246,8 @@ model Charge {
   // Flags futuras para intermediação de pagamento (split Asaas)
   is_intermediated Boolean  @default(false)
   platform_fee_pct Decimal? // % de taxa (padrão: 1.00)
-  asaas_payment_id String?  // ID da cobrança no Asaas (quando intermediada)
+  asaas_payment_id  String?  // ID da cobrança no Asaas (quando intermediada)
+  asaas_invoice_url String?  // URL de pagamento Asaas para o devedor
 
   creditor User             @relation("CreditorCharges", fields: [creditor_id], references: [id], onDelete: Cascade)
   debtor   User             @relation("DebtorCharges", fields: [debtor_id], references: [id], onDelete: Cascade)

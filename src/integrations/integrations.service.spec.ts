@@ -9,6 +9,7 @@ describe('IntegrationsService', () => {
     splitTerm: { findFirst: jest.fn(), create: jest.fn() },
     integrationConfig: { upsert: jest.fn(), findUnique: jest.fn() },
     auditLog: { create: jest.fn() },
+    subscription: { findFirst: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -46,16 +47,16 @@ describe('IntegrationsService', () => {
     it('deve criar termo padrão quando não existe nenhum no banco', async () => {
       mockPrisma.splitTerm.findFirst.mockResolvedValueOnce(null);
       mockPrisma.splitTerm.create.mockResolvedValueOnce({
-        version: '1.0.0',
-        asaas_pix_fee: 'R$ 0,99',
+        version: '2.0.0',
+        asaas_pix_fee: 'R$ 1,99',
         asaas_boleto_fee: 'R$ 1,99',
-        asaas_card_fee: '2.99%',
-        content: 'Termos...',
+        asaas_card_fee: '2,99% + R$ 0,49',
+        content: 'ver contractText',
       });
 
       const result = await service.getSplitTerms();
       expect(mockPrisma.splitTerm.create).toHaveBeenCalled();
-      expect(result.version).toBe('1.0.0');
+      expect(result.version).toBe('2.0.0');
     });
   });
 
@@ -120,33 +121,45 @@ describe('IntegrationsService', () => {
 
   // ─── getZapiConfig ───────────────────────────────────────────
   describe('getZapiConfig', () => {
-    it('deve retornar has_credentials true quando ambas credenciais configuradas', async () => {
+    it('deve retornar has_credentials true e can_use_own_zapi true para UNLIMITED', async () => {
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
         zapi_instance_id: 'inst-1',
         zapi_instance_token: 'tok-1',
       });
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce({ id: 'sub-1', plan_type: 'UNLIMITED' });
       const result = await service.getZapiConfig('user-1');
       expect(result.has_credentials).toBe(true);
       expect(result.zapi_instance_id).toBe('inst-1');
       expect(result.has_token).toBe(true);
+      expect(result.can_use_own_zapi).toBe(true);
     });
 
-    it('deve retornar has_credentials false quando config não existe', async () => {
+    it('deve retornar can_use_own_zapi false para planos não-UNLIMITED', async () => {
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce(null);
       const result = await service.getZapiConfig('user-1');
       expect(result.has_credentials).toBe(false);
-      expect(result.zapi_instance_id).toBeNull();
+      expect(result.can_use_own_zapi).toBe(false);
     });
   });
 
   // ─── updateZapiConfig ────────────────────────────────────────
   describe('updateZapiConfig', () => {
-    it('deve fazer upsert com instance_id e instance_token', async () => {
+    it('deve fazer upsert para usuário UNLIMITED', async () => {
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce({ id: 'sub-1', plan_type: 'UNLIMITED' });
       mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
       await service.updateZapiConfig('user-1', { instance_id: 'i1', instance_token: 't1' });
       const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
       expect(call.update.zapi_instance_id).toBe('i1');
       expect(call.update.zapi_instance_token).toBe('t1');
+    });
+
+    it('deve lançar ForbiddenException para planos não-UNLIMITED', async () => {
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce(null);
+      await expect(
+        service.updateZapiConfig('user-1', { instance_id: 'i1', instance_token: 't1' }),
+      ).rejects.toThrow('Número de WhatsApp próprio está disponível apenas no plano Unlimited.');
+      expect(mockPrisma.integrationConfig.upsert).not.toHaveBeenCalled();
     });
   });
 

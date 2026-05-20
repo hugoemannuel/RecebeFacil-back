@@ -97,9 +97,9 @@ export class ChargesService {
     const limit = planLimits[subscription.plan_type] || 0;
 
     const allowedRecurrences: Record<string, string[]> = {
-      FREE: ['ONCE'],
-      STARTER: ['ONCE', 'WEEKLY'],
-      PRO: ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
+      FREE:      ['ONCE'],
+      STARTER:   ['ONCE', 'MONTHLY'],
+      PRO:       ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
       UNLIMITED: ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
     };
 

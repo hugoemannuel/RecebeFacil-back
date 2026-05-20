@@ -96,24 +96,25 @@ export class AsaasService {
   async createPlanSubscription(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
     const customerId = await this.getOrCreateCustomer(userId, document);
     
-    // Definição de valores (Poderia vir de uma tabela de Planos futuramente)
-    const prices = {
-      [PlanType.FREE]: 0,
-      [PlanType.STARTER]: 49.90,
-      [PlanType.PRO]: 99.90,
-      [PlanType.UNLIMITED]: 199.90,
+    const prices: Record<string, { monthly: number; yearly: number }> = {
+      [PlanType.FREE]:      { monthly: 0,   yearly: 0 },
+      [PlanType.STARTER]:   { monthly: 59,  yearly: 564 },   // 20% off = R$47/mês
+      [PlanType.PRO]:       { monthly: 99,  yearly: 948 },   // 20% off = R$79/mês
+      [PlanType.UNLIMITED]: { monthly: 189, yearly: 1812 },  // 20% off = R$151/mês
     };
 
-    const value = prices[planType];
-    if (value === 0) return { status: 'FREE_PLAN' };
+    const planPrice = prices[planType];
+    if (!planPrice || planPrice.monthly === 0) return { status: 'FREE_PLAN' };
+
+    const value = period === 'YEARLY' ? planPrice.yearly : planPrice.monthly;
 
     const payload = {
       customer: customerId,
       billingType: 'UNDEFINED',
-      value: period === 'YEARLY' ? value * 10 : value,
+      value,
       nextDueDate: new Date().toISOString().split('T')[0],
       cycle: period === 'YEARLY' ? 'YEARLY' : 'MONTHLY',
-      description: `Plano RecebeFácil: ${planType} (${period})`,
+      description: `Plano RecebeFácil ${planType} (${period === 'YEARLY' ? 'Anual' : 'Mensal'})`,
     };
 
     this.logger.log(`Criando assinatura ${planType} para o cliente ${customerId}. Período: ${period}`);

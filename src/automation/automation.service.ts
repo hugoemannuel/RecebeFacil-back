@@ -122,7 +122,16 @@ export class AutomationService {
     const today = startOfDay(new Date());
 
     const configs = await this.prisma.integrationConfig.findMany({
-      where: { allows_automation: true, send_hour: currentHour },
+      where: {
+        allows_automation: true,
+        send_hour: currentHour,
+        user: {
+          subscription: {
+            status: 'ACTIVE',
+            plan_type: { in: ['STARTER', 'PRO', 'UNLIMITED'] },
+          },
+        },
+      },
     });
 
     if (configs.length === 0) return;

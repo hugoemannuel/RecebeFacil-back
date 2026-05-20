@@ -133,6 +133,10 @@ export class IntegrationsService {
       allows_automation: config.allows_automation,
       automation_days_before: config.automation_days_before,
       automation_days_after: config.automation_days_after,
+      send_hour: config.send_hour,
+      allow_before_due: config.allow_before_due,
+      allow_on_due: config.allow_on_due,
+      allow_overdue: config.allow_overdue,
     };
   }
 
@@ -140,6 +144,10 @@ export class IntegrationsService {
     allows_automation?: boolean;
     automation_days_before?: number;
     automation_days_after?: number;
+    send_hour?: number;
+    allow_before_due?: boolean;
+    allow_on_due?: boolean;
+    allow_overdue?: boolean;
   }) {
     return this.prisma.integrationConfig.upsert({
       where: { user_id: userId },
@@ -147,12 +155,20 @@ export class IntegrationsService {
         ...(data.allows_automation !== undefined && { allows_automation: data.allows_automation }),
         ...(data.automation_days_before !== undefined && { automation_days_before: data.automation_days_before }),
         ...(data.automation_days_after !== undefined && { automation_days_after: data.automation_days_after }),
+        ...(data.send_hour !== undefined && { send_hour: data.send_hour }),
+        ...(data.allow_before_due !== undefined && { allow_before_due: data.allow_before_due }),
+        ...(data.allow_on_due !== undefined && { allow_on_due: data.allow_on_due }),
+        ...(data.allow_overdue !== undefined && { allow_overdue: data.allow_overdue }),
       },
       create: {
         user_id: userId,
         allows_automation: data.allows_automation ?? true,
-        automation_days_before: data.automation_days_before ?? 1,
+        automation_days_before: data.automation_days_before ?? 2,
         automation_days_after: data.automation_days_after ?? 1,
+        send_hour: data.send_hour ?? 9,
+        allow_before_due: data.allow_before_due ?? true,
+        allow_on_due: data.allow_on_due ?? true,
+        allow_overdue: data.allow_overdue ?? true,
       },
     });
   }

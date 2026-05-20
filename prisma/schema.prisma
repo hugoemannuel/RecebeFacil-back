@@ -174,10 +174,15 @@ model IntegrationConfig {
   // Z-API (WhatsApp)
   zapi_instance_id    String? // ID da instância Z-API do lojista (futuro: número próprio)
   zapi_instance_token String? // Token da instância Z-API
-  allows_automation   Boolean @default(true) // Opt-out de automações (se devedor enviou PARAR)
-  
-  automation_days_before Int @default(1)
-  automation_days_after  Int @default(1)
+  allows_automation   Boolean @default(true) // Master switch de automações
+  automation_days_before Int @default(2)   // Dias antes do vencimento para lembrete
+  automation_days_after  Int @default(1)   // Dias após vencimento para cobrança de atraso
+  send_hour              Int @default(9)   // Hora de envio em BRT (0-23), padrão: 9h
+
+  // Controle independente por gatilho (todos ativos por padrão)
+  allow_before_due Boolean @default(true)
+  allow_on_due     Boolean @default(true)
+  allow_overdue    Boolean @default(true)
 
   // Asaas (Gateway de pagamento para ASSINATURA do lojista)
   asaas_customer_id   String? // ID do lojista como Customer no Asaas

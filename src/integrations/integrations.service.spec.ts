@@ -92,16 +92,23 @@ describe('IntegrationsService', () => {
 
   // ─── getAutomationConfig ──────────────────────────────────────
   describe('getAutomationConfig', () => {
-    it('deve retornar configuração de automação', async () => {
+    it('deve retornar configuração de automação com todos os campos', async () => {
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
         allows_automation: true,
         automation_days_before: 2,
         automation_days_after: 1,
+        send_hour: 9,
+        allow_before_due: true,
+        allow_on_due: true,
+        allow_overdue: false,
       });
 
       const result = await service.getAutomationConfig('user-1');
       expect(result?.allows_automation).toBe(true);
       expect(result?.automation_days_before).toBe(2);
+      expect(result?.send_hour).toBe(9);
+      expect(result?.allow_before_due).toBe(true);
+      expect(result?.allow_overdue).toBe(false);
     });
 
     it('deve retornar null quando não há configuração', async () => {
@@ -128,6 +135,40 @@ describe('IntegrationsService', () => {
       await service.updateAutomationConfig('user-1', {});
       const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
       expect(call.create.allows_automation).toBe(true);
+      expect(call.create.send_hour).toBe(9);
+      expect(call.create.allow_before_due).toBe(true);
+      expect(call.create.allow_on_due).toBe(true);
+      expect(call.create.allow_overdue).toBe(true);
+    });
+
+    it('deve persistir send_hour quando fornecido', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+
+      await service.updateAutomationConfig('user-1', { send_hour: 14 });
+      const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
+      expect(call.update.send_hour).toBe(14);
+    });
+
+    it('deve persistir flags individuais de gatilho', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+
+      await service.updateAutomationConfig('user-1', {
+        allow_before_due: false,
+        allow_on_due: true,
+        allow_overdue: false,
+      });
+      const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
+      expect(call.update.allow_before_due).toBe(false);
+      expect(call.update.allow_on_due).toBe(true);
+      expect(call.update.allow_overdue).toBe(false);
+    });
+
+    it('não deve incluir send_hour no update quando não fornecido', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+
+      await service.updateAutomationConfig('user-1', { allows_automation: true });
+      const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
+      expect(call.update.send_hour).toBeUndefined();
     });
   });
 });

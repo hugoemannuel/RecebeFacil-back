@@ -240,6 +240,29 @@ export class AsaasService {
     }
   }
 
+  /**
+   * Retorna o status do pagamento mais recente de uma assinatura Asaas.
+   * Usado pelo sync para ativar assinaturas quando o webhook não chegou.
+   */
+  async getLatestPaymentForSubscription(asaasId: string): Promise<{ id: string; status: string } | null> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(
+          `${this.baseUrl}/subscriptions/${asaasId}/payments`,
+          { headers: this.headers },
+        ),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      if (!payments.length) return null;
+      // Prioriza o mais recente com status confirmado
+      const confirmed = payments.find((p) => ['CONFIRMED', 'RECEIVED'].includes(p.status));
+      return confirmed ?? payments[0] ?? null;
+    } catch (error) {
+      this.logger.warn(`Erro ao buscar pagamentos da assinatura ${asaasId}: ${error.message}`);
+      return null;
+    }
+  }
+
   async cancelSubscription(asaasId: string): Promise<void> {
     try {
       await firstValueFrom(

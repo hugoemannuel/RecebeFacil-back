@@ -8,6 +8,8 @@ export const NOTIFICATION_DLQ   = 'whatsapp-notification-dlq';
 export class PgBossService implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(PgBossService.name);
   private boss: PgBoss;
+  private readyResolve!: () => void;
+  private readonly readyPromise = new Promise<void>((r) => { this.readyResolve = r; });
 
   async onApplicationBootstrap() {
     const connectionString = process.env.DATABASE_URL;
@@ -18,7 +20,12 @@ export class PgBossService implements OnApplicationBootstrap, OnApplicationShutd
     this.boss = new PgBoss(connectionString);
     this.boss.on('error', (err) => this.logger.error('pg-boss error:', err));
     await this.boss.start();
+    this.readyResolve();
     this.logger.log('pg-boss iniciado');
+  }
+
+  ready(): Promise<void> {
+    return this.readyPromise;
   }
 
   async onApplicationShutdown() {

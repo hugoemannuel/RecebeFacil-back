@@ -26,10 +26,19 @@ export class SubscriptionController {
   /**
    * POST /subscription/retry-payment
    * Stub para futura integração com Asaas — retentar cobrança do cartão.
-   * Implementar quando Asaas Connect estiver ativo.
    */
   @Post('retry-payment')
   async retryPayment(@Request() req) {
     return this.subscriptionService.getSubscriptionStatus(req.user.id);
+  }
+
+  /**
+   * POST /subscription/sync
+   * Consulta o Asaas e ativa a assinatura se o pagamento já foi confirmado.
+   * Fallback para quando o webhook não chegou (dev sem ngrok ou falha de rede).
+   */
+  @Post('sync')
+  async sync(@Request() req) {
+    return this.subscriptionService.syncWithAsaas(req.user.id);
   }
 }

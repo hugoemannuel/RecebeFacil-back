@@ -21,6 +21,7 @@ export class NotificationWorker implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
+    await this.pgBoss.ready();
     await this.pgBoss.instance.createQueue(NOTIFICATION_DLQ);
     await this.pgBoss.instance.createQueue(NOTIFICATION_QUEUE, {
       retryLimit: 3,

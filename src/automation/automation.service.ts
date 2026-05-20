@@ -163,11 +163,14 @@ export class AutomationService {
       },
     });
 
+    const eligibleCharges = charges.filter((c: any) => !c.debtor.whatsapp_opted_out);
+
+    const optedOut = charges.length - eligibleCharges.length;
     this.logger.log(
-      `Processando ${charges.length} cobrança(s) para ${configs.length} credor(es) [send_hour=${currentHour}h BRT].`,
+      `Processando ${eligibleCharges.length} cobrança(s) para ${configs.length} credor(es) [send_hour=${currentHour}h BRT]${optedOut > 0 ? ` (${optedOut} opt-out ignorados)` : ''}.`,
     );
 
-    for (const charge of charges) {
+    for (const charge of eligibleCharges) {
       const config = configMap.get(charge.creditor_id);
       if (!config) continue;
 
@@ -217,7 +220,7 @@ export class AutomationService {
         : undefined;
 
     try {
-      await this.whatsapp.sendText(charge.debtor.phone, message, credentials);
+      await this.sendWithRetry(charge.debtor.phone, message, credentials);
       await this.prisma.messageHistory.create({
         data: {
           charge_id: charge.id,
@@ -240,6 +243,22 @@ export class AutomationService {
         });
       } catch {}
     }
+  }
+
+  private async sendWithRetry(phone: string, message: string, credentials?: ZApiCredentials, maxAttempts = 3): Promise<void> {
+    let lastError: Error = new Error('Unknown Z-API error');
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.whatsapp.sendText(phone, message, credentials);
+        return;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxAttempts) {
+          this.logger.warn(`Z-API falhou (tentativa ${attempt}/${maxAttempts}): ${lastError.message}`);
+        }
+      }
+    }
+    throw lastError;
   }
 
   private buildAutomaticMessage(charge: any, trigger: string, templateBody?: string): string {

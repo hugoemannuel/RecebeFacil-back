@@ -260,6 +260,18 @@ export class SubscriptionService {
    * Gera o link de checkout real do Asaas.
    */
   async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
+    const existing = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+    if (
+      existing?.asaas_id &&
+      existing.plan_type === planType &&
+      existing.period === period &&
+      ['ACTIVE', 'PENDING', 'OVERDUE'].includes(existing.status)
+    ) {
+      const url = await this.asaasService.getSubscriptionPaymentUrl(existing.asaas_id);
+      this.logger.log(`Checkout dedup: retornando assinatura existente ${existing.asaas_id} para ${userId}`);
+      return { invoiceUrl: url, status: existing.status, asaasId: existing.asaas_id };
+    }
+
     const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
     
     if (checkout.asaasId) {

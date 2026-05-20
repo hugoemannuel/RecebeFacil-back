@@ -18,6 +18,7 @@ import { ReportsModule } from './reports/reports.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AutomationModule } from './automation/automation.module';
 import { IntegrationsModule } from './integrations/integrations.module';
+import { ZapiWebhookModule } from './webhooks/zapi-webhook.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { IntegrationsModule } from './integrations/integrations.module';
     ReportsModule,
     AutomationModule,
     IntegrationsModule,
+    ZapiWebhookModule,
   ],
   controllers: [AppController],
   providers: [

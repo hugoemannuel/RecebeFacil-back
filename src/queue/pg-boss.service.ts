@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } fro
 import { PgBoss } from 'pg-boss';
 
 export const NOTIFICATION_QUEUE = 'whatsapp-notification';
+export const NOTIFICATION_DLQ   = 'whatsapp-notification-dlq';
 
 @Injectable()
 export class PgBossService implements OnApplicationBootstrap, OnApplicationShutdown {

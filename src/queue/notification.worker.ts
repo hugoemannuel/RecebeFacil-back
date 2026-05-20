@@ -3,7 +3,7 @@ import { TriggerType } from '@prisma/client';
 import { startOfDay } from 'date-fns';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
-import { PgBossService, NOTIFICATION_QUEUE } from './pg-boss.service';
+import { PgBossService, NOTIFICATION_QUEUE, NOTIFICATION_DLQ } from './pg-boss.service';
 
 export interface NotificationJobData {
   chargeId: string;
@@ -21,7 +21,13 @@ export class NotificationWorker implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    await this.pgBoss.instance.createQueue(NOTIFICATION_QUEUE);
+    await this.pgBoss.instance.createQueue(NOTIFICATION_DLQ);
+    await this.pgBoss.instance.createQueue(NOTIFICATION_QUEUE, {
+      retryLimit: 3,
+      retryDelay: 60,
+      retryBackoff: true,
+      deadLetter: NOTIFICATION_DLQ,
+    });
     await this.pgBoss.instance.work<NotificationJobData>(
       NOTIFICATION_QUEUE,
       async (jobs) => {
@@ -50,6 +56,11 @@ export class NotificationWorker implements OnApplicationBootstrap {
     });
 
     if (!charge) return; // idempotência: cobrança pode ter sido deletada
+
+    if (charge.debtor.whatsapp_opted_out) {
+      this.logger.log(`Devedor ${charge.debtor.id} optou por não receber mensagens — skipping`);
+      return;
+    }
 
     const today = startOfDay(new Date());
     const alreadySent = await this.prisma.messageHistory.findFirst({

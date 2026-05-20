@@ -164,6 +164,19 @@ export class AsaasService {
     }
   }
 
+  async getSubscriptionPaymentUrl(asaasId: string): Promise<string | null> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/subscriptions/${asaasId}/payments`, { headers: this.headers }),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      const pending = payments.find((p: any) => p.status === 'PENDING') ?? payments[0];
+      return pending?.invoiceUrl ?? pending?.bankSlipUrl ?? pending?.checkoutUrl ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async cancelSubscription(asaasId: string): Promise<void> {
     try {
       await firstValueFrom(

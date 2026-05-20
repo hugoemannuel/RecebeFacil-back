@@ -94,6 +94,8 @@ model User {
 
   avatar_url    String?
 
+  whatsapp_opted_out Boolean @default(false) // true = não receber mensagens automáticas
+
   // Relacionamentos de cobrança
   charges_as_creditor   Charge[]                @relation("CreditorCharges")
   charges_as_debtor     Charge[]                @relation("DebtorCharges")

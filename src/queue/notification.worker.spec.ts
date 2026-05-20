@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationWorker, NotificationJobData } from './notification.worker';
-import { PgBossService, NOTIFICATION_QUEUE } from './pg-boss.service';
+import { PgBossService, NOTIFICATION_QUEUE, NOTIFICATION_DLQ } from './pg-boss.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { TriggerType } from '@prisma/client';
@@ -22,7 +22,7 @@ describe('NotificationWorker', () => {
     id: 'charge-1',
     amount: 10000,
     due_date: new Date('2026-06-15'),
-    debtor: { name: 'João Silva', phone: '5511999999999' },
+    debtor: { id: 'debtor-1', name: 'João Silva', phone: '5511999999999', whatsapp_opted_out: false },
     creditor: {
       name: 'Empresa X',
       creditor_profile: {
@@ -53,9 +53,19 @@ describe('NotificationWorker', () => {
   // ─── onApplicationBootstrap ──────────────────────────────────
 
   describe('onApplicationBootstrap', () => {
-    it('deve criar a fila e registrar o worker', async () => {
+    it('deve criar DLQ, fila principal com retry e registrar o worker', async () => {
       await worker.onApplicationBootstrap();
-      expect(mockBossInstance.createQueue).toHaveBeenCalledWith(NOTIFICATION_QUEUE);
+
+      expect(mockBossInstance.createQueue).toHaveBeenCalledWith(NOTIFICATION_DLQ);
+      expect(mockBossInstance.createQueue).toHaveBeenCalledWith(
+        NOTIFICATION_QUEUE,
+        expect.objectContaining({
+          retryLimit: 3,
+          retryDelay: 60,
+          retryBackoff: true,
+          deadLetter: NOTIFICATION_DLQ,
+        }),
+      );
       expect(mockBossInstance.work).toHaveBeenCalledWith(
         NOTIFICATION_QUEUE,
         expect.any(Function),
@@ -114,6 +124,17 @@ describe('NotificationWorker', () => {
 
       await expect(worker.handle(jobData)).resolves.toBeUndefined();
       expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('deve ignorar devedor com opt-out ativo', async () => {
+      mockPrisma.charge.findUnique.mockResolvedValueOnce(
+        makeCharge({ debtor: { id: 'debtor-1', name: 'João Silva', phone: '5511999999999', whatsapp_opted_out: true } }),
+      );
+
+      await worker.handle(jobData);
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+      expect(mockPrisma.messageHistory.create).not.toHaveBeenCalled();
     });
 
     it('deve passar credenciais do lojista quando integration_config configurado', async () => {

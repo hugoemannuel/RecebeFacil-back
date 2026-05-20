@@ -23,7 +23,7 @@ const makeCharge = (overrides: Partial<Record<string, any>> = {}) => ({
   status: 'PENDING',
   creditor_id: 'user-1',
   messages: [],
-  debtor: { id: 'debtor-1', name: 'João', phone: '5511999999999' },
+  debtor: { id: 'debtor-1', name: 'João', phone: '5511999999999', whatsapp_opted_out: false },
   creditor: {
     name: 'Loja',
     creditor_profile: { business_name: 'Loja LTDA', pix_key: '123', message_templates: [] },
@@ -174,7 +174,7 @@ describe('AutomationService', () => {
       expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(1);
     });
 
-    it('deve continuar mesmo se WhatsApp falhar para uma cobrança', async () => {
+    it('deve continuar mesmo se WhatsApp falhar para uma cobrança (registra FAILED)', async () => {
       mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
       mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
       mockPrisma.charge.findMany.mockResolvedValueOnce([
@@ -184,6 +184,59 @@ describe('AutomationService', () => {
       mockPrisma.messageHistory.create.mockResolvedValue({});
 
       await expect(service.handleDailyBillingSync()).resolves.not.toThrow();
+      expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+      );
+    });
+
+    it('deve tentar 3 vezes antes de desistir (retry)', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
+      ]);
+      mockWhatsapp.sendText.mockRejectedValue(new Error('Z-API timeout'));
+      mockPrisma.messageHistory.create.mockResolvedValue({});
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(3);
+    });
+
+    it('deve enviar na segunda tentativa quando primeira falha (retry recovery)', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
+      ]);
+      mockWhatsapp.sendText
+        .mockRejectedValueOnce(new Error('Z-API timeout'))
+        .mockResolvedValueOnce(undefined);
+      mockPrisma.messageHistory.create.mockResolvedValue({});
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+      );
+    });
+
+    it('não deve enviar para devedor com opt-out ativo', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({
+          due_date: new Date(),
+          status: 'PENDING',
+          messages: [],
+          debtor: { id: 'debtor-1', name: 'João', phone: '5511999999999', whatsapp_opted_out: true },
+        }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
     });
 
     // ─── send_hour ────────────────────────────────────────────────

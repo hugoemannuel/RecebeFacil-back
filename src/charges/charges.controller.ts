@@ -1,10 +1,11 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, HttpCode, HttpStatus } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ChargesService } from './charges.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { UpdateChargeStatusDto } from './dto/update-charge-status.dto';
 import { AutomateChargeDto } from './dto/automate-charge.dto';
+import { NotifyNowDto } from './dto/notify-now.dto';
 
 @Controller('charges')
 @UseGuards(AuthGuard('jwt'))
@@ -74,6 +75,12 @@ export class ChargesController {
   @Post(':id/automate')
   async automateCharge(@Request() req, @Param('id') id: string, @Body() dto: AutomateChargeDto) {
     return this.chargesService.automateCharge(req.user.id, id, dto);
+  }
+
+  @Post(':id/notify')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async notifyNow(@Request() req, @Param('id') id: string, @Body() dto: NotifyNowDto) {
+    return this.chargesService.notifyNow(req.user.id, id, dto.trigger);
   }
 
   @Patch(':id/status')

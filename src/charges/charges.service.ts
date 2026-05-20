@@ -1,17 +1,20 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { AutomateChargeDto } from './dto/automate-charge.dto';
-import { PixKeyType } from '@prisma/client';
+import { PixKeyType, TriggerType } from '@prisma/client';
 import { canSaveMoreTemplates } from '../common/plan-modules';
+import { startOfDay } from 'date-fns';
+import { PgBossService, NOTIFICATION_QUEUE } from '../queue/pg-boss.service';
 
 @Injectable()
 export class ChargesService {
   constructor(
     private prisma: PrismaService,
     private clientsService: ClientsService,
+    private pgBoss: PgBossService,
   ) {}
 
   async findAll(userId: string) {
@@ -500,5 +503,22 @@ export class ChargesService {
     });
 
     return { success: true, recurringChargeId: recurringCharge.id };
+  }
+
+  async notifyNow(userId: string, chargeId: string, trigger: 'BEFORE_DUE' | 'ON_DUE' | 'OVERDUE') {
+    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
+    if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
+
+    const today = startOfDay(new Date());
+    const alreadySent = await this.prisma.messageHistory.findFirst({
+      where: { charge_id: chargeId, trigger_type: TriggerType.MANUAL, sent_at: { gte: today } },
+    });
+    if (alreadySent) throw new ConflictException('Notificação manual já enviada hoje para esta cobrança.');
+
+    await this.pgBoss.send(NOTIFICATION_QUEUE, { chargeId, trigger }, {
+      singletonKey: `${chargeId}-manual`,
+    });
+
+    return { queued: true };
   }
 }

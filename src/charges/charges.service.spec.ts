@@ -1,8 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { ChargesService } from './charges.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
+import { PgBossService } from '../queue/pg-boss.service';
 
 describe('ChargesService', () => {
   let service: ChargesService;
@@ -28,11 +29,12 @@ describe('ChargesService', () => {
     user: { findUnique: jest.fn(), create: jest.fn() },
     creditorProfile: { findUnique: jest.fn(), upsert: jest.fn() },
     messageTemplate: { count: jest.fn(), create: jest.fn() },
-    messageHistory: { create: jest.fn() },
+    messageHistory: { create: jest.fn(), findFirst: jest.fn() },
     auditLog: { create: jest.fn() },
   };
 
   const mockClientsService = { upsertFromCharge: jest.fn() };
+  const mockPgBoss = { send: jest.fn().mockResolvedValue('job-id-1') };
 
   const activeSub = { plan_type: 'PRO', status: 'ACTIVE' };
 
@@ -42,6 +44,7 @@ describe('ChargesService', () => {
         ChargesService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ClientsService, useValue: mockClientsService },
+        { provide: PgBossService, useValue: mockPgBoss },
       ],
     }).compile();
     service = module.get<ChargesService>(ChargesService);
@@ -442,6 +445,42 @@ describe('ChargesService', () => {
     it('deve lançar ForbiddenException para IDOR', async () => {
       mockPrisma.charge.findUnique.mockResolvedValueOnce({ id: 'c1', creditor_id: 'outro' });
       await expect(service.automateCharge('user-1', 'c1', dto)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  // ─── notifyNow ────────────────────────────────────────────────
+  describe('notifyNow', () => {
+    const charge = { id: 'c1', creditor_id: 'user-1' };
+
+    it('deve enfileirar job e retornar { queued: true }', async () => {
+      mockPrisma.charge.findUnique.mockResolvedValueOnce(charge);
+      mockPrisma.messageHistory.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.notifyNow('user-1', 'c1', 'BEFORE_DUE');
+
+      expect(mockPgBoss.send).toHaveBeenCalledWith(
+        'whatsapp-notification',
+        { chargeId: 'c1', trigger: 'BEFORE_DUE' },
+        expect.objectContaining({ singletonKey: 'c1-manual' }),
+      );
+      expect(result).toEqual({ queued: true });
+    });
+
+    it('deve lançar ForbiddenException se cobrança não encontrada', async () => {
+      mockPrisma.charge.findUnique.mockResolvedValueOnce(null);
+      await expect(service.notifyNow('user-1', 'c1', 'ON_DUE')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('deve lançar ForbiddenException se cobrança pertence a outro usuário', async () => {
+      mockPrisma.charge.findUnique.mockResolvedValueOnce({ id: 'c1', creditor_id: 'outro' });
+      await expect(service.notifyNow('user-1', 'c1', 'OVERDUE')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('deve lançar ConflictException se MANUAL já enviado hoje', async () => {
+      mockPrisma.charge.findUnique.mockResolvedValueOnce(charge);
+      mockPrisma.messageHistory.findFirst.mockResolvedValueOnce({ id: 'msg-1' });
+      await expect(service.notifyNow('user-1', 'c1', 'BEFORE_DUE')).rejects.toThrow(ConflictException);
+      expect(mockPgBoss.send).not.toHaveBeenCalled();
     });
   });
 });

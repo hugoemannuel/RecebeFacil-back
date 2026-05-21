@@ -1,15 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { IntegrationsService } from './integrations.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AsaasService } from './asaas.service';
 
 describe('IntegrationsService', () => {
   let service: IntegrationsService;
 
   const mockPrisma = {
     splitTerm: { findFirst: jest.fn(), create: jest.fn() },
-    integrationConfig: { upsert: jest.fn(), findUnique: jest.fn() },
+    integrationConfig: { upsert: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
     auditLog: { create: jest.fn() },
     subscription: { findFirst: jest.fn() },
+  };
+
+  const mockAsaas = {
+    createSubaccount: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -17,6 +22,7 @@ describe('IntegrationsService', () => {
       providers: [
         IntegrationsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: AsaasService, useValue: mockAsaas },
       ],
     }).compile();
     service = module.get<IntegrationsService>(IntegrationsService);
@@ -62,13 +68,22 @@ describe('IntegrationsService', () => {
 
   // ─── acknowledgeSplitTerms ────────────────────────────────────
   describe('acknowledgeSplitTerms', () => {
-    it('deve salvar aceite e registrar AuditLog', async () => {
+    beforeEach(() => {
+      mockAsaas.createSubaccount.mockResolvedValue({ walletId: 'wlt_ok', accountKey: 'key_ok' });
+      mockPrisma.integrationConfig.update.mockResolvedValue({});
+      mockPrisma.auditLog.create.mockResolvedValue({});
+    });
+
+    it('deve salvar aceite, criar subconta Asaas e registrar AuditLog', async () => {
       const config = { id: 'cfg-1', user_id: 'user-1' };
       mockPrisma.integrationConfig.upsert.mockResolvedValueOnce(config);
-      mockPrisma.auditLog.create.mockResolvedValueOnce({});
 
       const result = await service.acknowledgeSplitTerms('user-1', { version: '1.0.0' });
       expect(result.id).toBe('cfg-1');
+      expect(mockAsaas.createSubaccount).toHaveBeenCalledWith('user-1', undefined);
+      expect(mockPrisma.integrationConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { asaas_wallet_id: 'wlt_ok' } }),
+      );
       expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ action: 'SPLIT_TERMS_ACCEPTED' }),
@@ -76,9 +91,15 @@ describe('IntegrationsService', () => {
       );
     });
 
+    it('deve passar documento para createSubaccount quando fornecido', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+
+      await service.acknowledgeSplitTerms('user-1', { version: '1.0.0', document: '12345678901' });
+      expect(mockAsaas.createSubaccount).toHaveBeenCalledWith('user-1', '12345678901');
+    });
+
     it('deve registrar document_provided como true quando documento fornecido', async () => {
       mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
-      mockPrisma.auditLog.create.mockResolvedValueOnce({});
 
       await service.acknowledgeSplitTerms('user-1', { version: '1.0.0', document: '12345678901' });
       expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
@@ -88,6 +109,17 @@ describe('IntegrationsService', () => {
           }),
         }),
       );
+    });
+
+    it('deve continuar mesmo se criação da subconta falhar (degradação segura)', async () => {
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({ id: 'cfg-1' });
+      mockAsaas.createSubaccount.mockRejectedValueOnce(new Error('Asaas indisponível'));
+
+      const result = await service.acknowledgeSplitTerms('user-1', { version: '1.0.0' });
+      expect(result.id).toBe('cfg-1');
+      expect(mockPrisma.auditLog.create).toHaveBeenCalled();
+      // walletId não é atualizado quando createSubaccount falha
+      expect(mockPrisma.integrationConfig.update).not.toHaveBeenCalled();
     });
   });
 

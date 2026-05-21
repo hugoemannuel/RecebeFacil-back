@@ -377,6 +377,48 @@ describe('ChargesService', () => {
       );
     });
 
+    it('deve passar walletId ao createIntermediatedPayment quando integrationConfig tem asaas_wallet_id', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        split_terms_accepted_at: new Date(),
+        asaas_wallet_id: 'wlt_loja',
+      });
+      mockPrisma.user.findUnique.mockResolvedValueOnce(debtor);
+      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'charge-split-wlt' });
+      mockAsaas.createIntermediatedPayment.mockResolvedValueOnce({
+        asaasPaymentId: 'pay_wlt', invoiceUrl: 'https://asaas.com/pay_wlt',
+      });
+      mockPrisma.charge.update.mockResolvedValueOnce({});
+
+      await service.createCharge('user-1', { ...dto, is_intermediated: true });
+
+      expect(mockAsaas.createIntermediatedPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ walletId: 'wlt_loja', platformFeePct: 2 }),
+      );
+    });
+
+    it('deve passar walletId undefined quando integrationConfig não tem asaas_wallet_id (split inativo)', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
+      mockPrisma.charge.count.mockResolvedValueOnce(0);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        split_terms_accepted_at: new Date(),
+        asaas_wallet_id: null,
+      });
+      mockPrisma.user.findUnique.mockResolvedValueOnce(debtor);
+      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'charge-no-wlt' });
+      mockAsaas.createIntermediatedPayment.mockResolvedValueOnce({
+        asaasPaymentId: 'pay_x', invoiceUrl: 'https://url',
+      });
+      mockPrisma.charge.update.mockResolvedValueOnce({});
+
+      await service.createCharge('user-1', { ...dto, is_intermediated: true });
+
+      expect(mockAsaas.createIntermediatedPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ walletId: undefined }),
+      );
+    });
+
     it('deve deletar cobrança e re-lançar se Asaas falhar', async () => {
       mockPrisma.subscription.findUnique.mockResolvedValueOnce(activeSub);
       mockPrisma.charge.count.mockResolvedValueOnce(0);

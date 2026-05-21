@@ -178,7 +178,56 @@ export class AsaasService {
   }
 
   /**
+   * Cria subconta Asaas para o lojista e salva walletId + accountKey no IntegrationConfig.
+   * Necessário para que o split de receita funcione.
+   */
+  async createSubaccount(userId: string, document?: string): Promise<{ walletId: string; accountKey: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { creditor_profile: true },
+    });
+
+    if (!user) throw new HttpException('Usuário não encontrado', HttpStatus.NOT_FOUND);
+
+    const cpfCnpj = document || user.creditor_profile?.document;
+
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/accounts`,
+          {
+            name: user.name,
+            email: user.email,
+            cpfCnpj,
+            mobilePhone: (user as any).phone || '',
+            accountType: 'INDIVIDUAL',
+          },
+          { headers: this.headers },
+        ),
+      );
+
+      const walletId: string = resp.data.walletId;
+      const accountKey: string = resp.data.apiKey;
+
+      await this.prisma.integrationConfig.upsert({
+        where: { user_id: userId },
+        update: { asaas_wallet_id: walletId, asaas_account_key: accountKey },
+        create: { user_id: userId, asaas_wallet_id: walletId, asaas_account_key: accountKey },
+      });
+
+      this.logger.log(`Subconta Asaas criada para usuário ${userId}. WalletId: ${walletId}`);
+      return { walletId, accountKey };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar subconta no Asaas';
+      this.logger.error(`Erro ao criar subconta Asaas: ${msg}`, error.response?.data);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
+  /**
    * Cria um pagamento avulso no Asaas para cobrança intermediada.
+   * Quando walletId e platformFeePct fornecidos, aplica split automático:
+   * lojista recebe (100 - platformFeePct)% e a plataforma retém platformFeePct%.
    * O externalReference é o ID interno da cobrança para reconciliação no webhook.
    */
   async createIntermediatedPayment(data: {
@@ -188,6 +237,8 @@ export class AsaasService {
     dueDate: Date;
     description: string;
     chargeId: string;
+    walletId?: string;
+    platformFeePct?: number;
   }): Promise<{ asaasPaymentId: string; invoiceUrl: string }> {
     // 1. Criar cliente devedor no Asaas
     let debtorCustomerId: string;
@@ -213,6 +264,11 @@ export class AsaasService {
     }
 
     // 2. Criar cobrança avulsa
+    const split =
+      data.walletId && data.platformFeePct !== undefined
+        ? [{ walletId: data.walletId, percentualValue: 100 - data.platformFeePct }]
+        : undefined;
+
     try {
       const resp = await firstValueFrom(
         this.httpService.post(
@@ -225,6 +281,7 @@ export class AsaasService {
             description: data.description,
             externalReference: data.chargeId,
             notificationDisabled: false,
+            ...(split && { split }),
           },
           { headers: this.headers },
         ),

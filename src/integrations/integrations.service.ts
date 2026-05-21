@@ -1,9 +1,15 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AsaasService } from './asaas.service';
 
 @Injectable()
 export class IntegrationsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(IntegrationsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private asaasService: AsaasService,
+  ) {}
 
   /**
    * Retorna os termos de split e as taxas atuais.
@@ -148,16 +154,13 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
   }
 
   /**
-   * Registra o aceite dos termos e salva dados da subconta.
+   * Registra o aceite dos termos, cria a subconta Asaas e salva walletId.
    */
-  async acknowledgeSplitTerms(userId: string, data: { 
-    version: string, 
+  async acknowledgeSplitTerms(userId: string, data: {
+    version: string,
     document?: string,
-    bankData?: any 
+    bankData?: any
   }) {
-    // Aqui no futuro faremos a chamada real para o Asaas para criar a subaccount.
-    // Por enquanto, salvamos o aceite e os dados no IntegrationConfig.
-    
     const config = await this.prisma.integrationConfig.upsert({
       where: { user_id: userId },
       update: {
@@ -168,22 +171,34 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
         user_id: userId,
         split_terms_accepted_at: new Date(),
         split_terms_version: data.version,
-      }
+      },
     });
 
-    // Auditoria Geral (Imutável)
+    // Cria subconta Asaas para viabilizar o split automático de receita
+    try {
+      const { walletId } = await this.asaasService.createSubaccount(userId, data.document);
+      await this.prisma.integrationConfig.update({
+        where: { user_id: userId },
+        data: { asaas_wallet_id: walletId },
+      });
+      this.logger.log(`Subconta Asaas configurada para usuário ${userId}. WalletId: ${walletId}`);
+    } catch (err) {
+      // Falha na subconta não bloqueia o aceite dos termos — split ficará inativo até retry
+      this.logger.warn(`Subconta Asaas não criada para usuário ${userId}: ${err.message}`);
+    }
+
     await this.prisma.auditLog.create({
       data: {
         user_id: userId,
         action: 'SPLIT_TERMS_ACCEPTED',
         entity: 'IntegrationConfig',
         entity_id: config.id,
-        details: { 
+        details: {
           version: data.version,
           accepted_at: new Date(),
-          document_provided: !!data.document
-        }
-      }
+          document_provided: !!data.document,
+        },
+      },
     });
 
     return config;

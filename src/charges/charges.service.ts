@@ -131,11 +131,12 @@ export class ChargesService {
     }
 
     // 1.5 Validate split prerequisites
+    let integrationConfig: Awaited<ReturnType<typeof this.prisma.integrationConfig.findUnique>> | null = null;
     if (dto.is_intermediated) {
       if (!['PRO', 'UNLIMITED'].includes(subscription.plan_type)) {
         throw new ForbiddenException('SPLIT_PLAN_REQUIRED');
       }
-      const integrationConfig = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
+      integrationConfig = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
       if (!integrationConfig?.split_terms_accepted_at) {
         throw new ForbiddenException('SPLIT_TERMS_NOT_ACCEPTED');
       }
@@ -229,6 +230,8 @@ export class ChargesService {
           dueDate: new Date(dto.due_date),
           description: dto.description,
           chargeId: charge.id,
+          walletId: integrationConfig?.asaas_wallet_id ?? undefined,
+          platformFeePct,
         });
         await this.prisma.charge.update({
           where: { id: charge.id },

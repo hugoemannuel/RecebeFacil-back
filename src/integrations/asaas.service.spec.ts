@@ -145,6 +145,125 @@ describe('AsaasService', () => {
     });
   });
 
+  // ─── createSubaccount ─────────────────────────────────────────
+  describe('createSubaccount', () => {
+    it('deve criar subconta e salvar walletId + accountKey', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1', name: 'João', email: 'j@j.com', phone: '5511999',
+        creditor_profile: { document: '12345678901' },
+      });
+      mockHttpService.post.mockReturnValueOnce(of({ data: { walletId: 'wlt_123', apiKey: 'acc_key_abc' } }));
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({});
+
+      const result = await service.createSubaccount('user-1');
+      expect(result.walletId).toBe('wlt_123');
+      expect(result.accountKey).toBe('acc_key_abc');
+      expect(mockPrisma.integrationConfig.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({ asaas_wallet_id: 'wlt_123', asaas_account_key: 'acc_key_abc' }),
+        }),
+      );
+    });
+
+    it('deve usar documento fornecido como parâmetro sobre o do perfil', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1', name: 'João', email: 'j@j.com', phone: '',
+        creditor_profile: { document: '00000000000' },
+      });
+      mockHttpService.post.mockReturnValueOnce(of({ data: { walletId: 'wlt_x', apiKey: 'key_x' } }));
+      mockPrisma.integrationConfig.upsert.mockResolvedValueOnce({});
+
+      await service.createSubaccount('user-1', '99999999901');
+      const call = mockHttpService.post.mock.calls[0][1];
+      expect(call.cpfCnpj).toBe('99999999901');
+    });
+
+    it('deve lançar HttpException quando usuário não encontrado', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+      await expect(service.createSubaccount('user-x')).rejects.toThrow(HttpException);
+    });
+
+    it('deve lançar HttpException quando Asaas retorna erro', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1', name: 'João', email: 'j@j.com', phone: '',
+        creditor_profile: null,
+      });
+      mockHttpService.post.mockReturnValueOnce(
+        throwError(() => ({ response: { data: { errors: [{ description: 'CPF inválido' }] } } })),
+      );
+      await expect(service.createSubaccount('user-1')).rejects.toThrow(HttpException);
+    });
+  });
+
+  // ─── createIntermediatedPayment ───────────────────────────────
+  describe('createIntermediatedPayment', () => {
+    const baseData = {
+      debtorName: 'Ana Souza',
+      debtorPhone: '5511888',
+      amountCentavos: 50000,
+      dueDate: new Date('2026-07-01'),
+      description: 'Serviço prestado',
+      chargeId: 'charge-abc',
+    };
+
+    it('deve criar cliente devedor e pagamento sem split quando walletId ausente', async () => {
+      mockHttpService.post
+        .mockReturnValueOnce(of({ data: { id: 'cus_debtor' } }))
+        .mockReturnValueOnce(of({ data: { id: 'pay_001', invoiceUrl: 'https://asaas.com/pay_001' } }));
+
+      const result = await service.createIntermediatedPayment(baseData);
+      expect(result.asaasPaymentId).toBe('pay_001');
+      expect(result.invoiceUrl).toBe('https://asaas.com/pay_001');
+
+      const paymentPayload = mockHttpService.post.mock.calls[1][1];
+      expect(paymentPayload.split).toBeUndefined();
+    });
+
+    it('deve incluir split quando walletId e platformFeePct fornecidos (PRO 2%)', async () => {
+      mockHttpService.post
+        .mockReturnValueOnce(of({ data: { id: 'cus_debtor' } }))
+        .mockReturnValueOnce(of({ data: { id: 'pay_002', invoiceUrl: 'https://asaas.com/pay_002' } }));
+
+      await service.createIntermediatedPayment({
+        ...baseData,
+        walletId: 'wlt_loja',
+        platformFeePct: 2,
+      });
+
+      const paymentPayload = mockHttpService.post.mock.calls[1][1];
+      expect(paymentPayload.split).toEqual([{ walletId: 'wlt_loja', percentualValue: 98 }]);
+    });
+
+    it('deve incluir split com 99% para plano UNLIMITED (taxa 1%)', async () => {
+      mockHttpService.post
+        .mockReturnValueOnce(of({ data: { id: 'cus_debtor' } }))
+        .mockReturnValueOnce(of({ data: { id: 'pay_003', invoiceUrl: 'https://asaas.com/pay_003' } }));
+
+      await service.createIntermediatedPayment({
+        ...baseData,
+        walletId: 'wlt_unlimited',
+        platformFeePct: 1,
+      });
+
+      const paymentPayload = mockHttpService.post.mock.calls[1][1];
+      expect(paymentPayload.split).toEqual([{ walletId: 'wlt_unlimited', percentualValue: 99 }]);
+    });
+
+    it('deve lançar HttpException quando criação do cliente devedor falha', async () => {
+      mockHttpService.post.mockReturnValueOnce(
+        throwError(() => ({ response: { data: { errors: [{ description: 'Telefone inválido' }] } } })),
+      );
+      await expect(service.createIntermediatedPayment(baseData)).rejects.toThrow(HttpException);
+    });
+
+    it('deve lançar HttpException quando criação do pagamento falha', async () => {
+      mockHttpService.post
+        .mockReturnValueOnce(of({ data: { id: 'cus_ok' } }))
+        .mockReturnValueOnce(throwError(() => ({ response: { data: { errors: [{ description: 'Valor inválido' }] } } })));
+      await expect(service.createIntermediatedPayment(baseData)).rejects.toThrow(HttpException);
+    });
+  });
+
   // ─── cancelSubscription ───────────────────────────────────────
   describe('cancelSubscription', () => {
     it('deve chamar DELETE no Asaas com o asaasId correto', async () => {

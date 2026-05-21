@@ -1,7 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { AsaasService } from '../integrations/asaas.service';
+import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { AutomateChargeDto } from './dto/automate-charge.dto';
@@ -12,11 +13,14 @@ import { PgBossService, NOTIFICATION_QUEUE } from '../queue/pg-boss.service';
 
 @Injectable()
 export class ChargesService {
+  private readonly logger = new Logger(ChargesService.name);
+
   constructor(
     private prisma: PrismaService,
     private clientsService: ClientsService,
     private pgBoss: PgBossService,
     private asaasService: AsaasService,
+    private whatsapp: WhatsAppService,
   ) {}
 
   async findAll(userId: string) {
@@ -242,13 +246,62 @@ export class ChargesService {
       }
     }
 
-    // 5. Create MessageHistory
+    // 5. Enviar WhatsApp com a mensagem customizada
+    let whatsappStatus = 'PENDING';
+    let whatsappErrorDetails: string | undefined;
+    let zapiMessageId: string | undefined;
+
+    if (!dto.is_intermediated) {
+      // Busca perfil e config do credor para construir a mensagem
+      const [creditorProfile, integrationConfig] = await Promise.all([
+        this.prisma.creditorProfile.findUnique({ where: { user_id: userId } }),
+        this.prisma.integrationConfig.findUnique({ where: { user_id: userId } }),
+      ]);
+
+      const dueDate = new Date(dto.due_date);
+      const dueDateStr = dueDate.toLocaleDateString('pt-BR');
+      const amountStr = (dto.amount / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const businessName = creditorProfile?.business_name || debtor.name;
+
+      let message = (dto.custom_message || '')
+        .replace(/{{nome}}/g, debtor.name)
+        .replace(/{{valor}}/g, amountStr)
+        .replace(/{{vencimento}}/g, dueDateStr)
+        .replace(/{{descricao}}/g, dto.description || '')
+        .replace(/{{nome_empresa}}/g, businessName);
+
+      // Append chave PIX do perfil se configurada
+      if (creditorProfile?.pix_key) {
+        message += `\n\n💰 *Chave PIX (${creditorProfile.pix_key_type ?? 'PIX'}):*\n${creditorProfile.pix_key}`;
+      }
+
+      const credentials: ZApiCredentials | undefined =
+        integrationConfig?.zapi_instance_id && integrationConfig?.zapi_instance_token
+          ? {
+              instanceId: integrationConfig.zapi_instance_id,
+              token: integrationConfig.zapi_instance_token,
+              clientToken: process.env.ZAPI_CLIENT_TOKEN ?? '',
+            }
+          : undefined;
+
+      try {
+        await this.whatsapp.sendText(debtor.phone, message, credentials);
+        whatsappStatus = 'SENT';
+      } catch (err) {
+        whatsappStatus = 'FAILED';
+        whatsappErrorDetails = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`WhatsApp falhou para cobrança ${charge.id}: ${whatsappErrorDetails}`);
+      }
+    }
+
     await this.prisma.messageHistory.create({
       data: {
         charge_id: charge.id,
         trigger_type: 'MANUAL',
-        status: 'PENDING',
-      }
+        status: whatsappStatus,
+        zapi_message_id: zapiMessageId,
+        error_details: whatsappErrorDetails,
+      },
     });
 
     await this.prisma.auditLog.create({

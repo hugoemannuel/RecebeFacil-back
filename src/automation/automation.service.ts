@@ -220,13 +220,13 @@ export class AutomationService {
         : undefined;
 
     try {
-      await this.sendWithRetry(charge.debtor.phone, message, credentials);
+      const zapiMessageId = await this.sendWithRetry(charge.debtor.phone, message, credentials);
       await this.prisma.messageHistory.create({
         data: {
           charge_id: charge.id,
           trigger_type: triggerType,
           status: 'SENT',
-          zapi_message_id: 'AUTO_' + Math.random().toString(36).substring(7),
+          zapi_message_id: zapiMessageId ?? undefined,
         },
       });
       this.logger.log(`Notificação ${trigger} enviada: ${charge.debtor.name}`);
@@ -245,12 +245,11 @@ export class AutomationService {
     }
   }
 
-  private async sendWithRetry(phone: string, message: string, credentials?: ZApiCredentials, maxAttempts = 3): Promise<void> {
+  private async sendWithRetry(phone: string, message: string, credentials?: ZApiCredentials, maxAttempts = 3): Promise<string | null> {
     let lastError: Error = new Error('Unknown Z-API error');
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await this.whatsapp.sendText(phone, message, credentials);
-        return;
+        return await this.whatsapp.sendText(phone, message, credentials);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < maxAttempts) {

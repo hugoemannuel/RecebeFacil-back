@@ -9,7 +9,10 @@ describe('NotificationWorker', () => {
   let worker: NotificationWorker;
 
   const mockBossInstance = { createQueue: jest.fn(), work: jest.fn() };
-  const mockPgBoss = { instance: mockBossInstance };
+  const mockPgBoss = {
+    instance: mockBossInstance,
+    ready: jest.fn().mockResolvedValue(undefined),
+  };
 
   const mockPrisma = {
     charge: { findUnique: jest.fn() },
@@ -81,14 +84,18 @@ describe('NotificationWorker', () => {
     it('deve enviar mensagem e registrar SENT no MessageHistory', async () => {
       mockPrisma.charge.findUnique.mockResolvedValueOnce(makeCharge());
       mockPrisma.messageHistory.findFirst.mockResolvedValueOnce(null);
-      mockWhatsapp.sendText.mockResolvedValueOnce(undefined);
+      mockWhatsapp.sendText.mockResolvedValueOnce('MSG-001');
       mockPrisma.messageHistory.create.mockResolvedValueOnce({});
 
       await worker.handle(jobData);
 
       expect(mockWhatsapp.sendText).toHaveBeenCalledWith('5511999999999', expect.any(String), undefined);
       expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ trigger_type: TriggerType.MANUAL, status: 'SENT' }),
+        data: expect.objectContaining({
+          trigger_type: TriggerType.MANUAL,
+          status: 'SENT',
+          zapi_message_id: 'MSG-001',
+        }),
       });
     });
 
@@ -147,7 +154,7 @@ describe('NotificationWorker', () => {
       });
       mockPrisma.charge.findUnique.mockResolvedValueOnce(chargeWithCreds);
       mockPrisma.messageHistory.findFirst.mockResolvedValueOnce(null);
-      mockWhatsapp.sendText.mockResolvedValueOnce(undefined);
+      mockWhatsapp.sendText.mockResolvedValueOnce('MSG-LOJA');
       mockPrisma.messageHistory.create.mockResolvedValueOnce({});
 
       await worker.handle(jobData);
@@ -174,7 +181,7 @@ describe('NotificationWorker', () => {
       });
       mockPrisma.charge.findUnique.mockResolvedValueOnce(chargeWithTemplate);
       mockPrisma.messageHistory.findFirst.mockResolvedValueOnce(null);
-      mockWhatsapp.sendText.mockResolvedValueOnce(undefined);
+      mockWhatsapp.sendText.mockResolvedValueOnce(null);
       mockPrisma.messageHistory.create.mockResolvedValueOnce({});
 
       await worker.handle(jobData);

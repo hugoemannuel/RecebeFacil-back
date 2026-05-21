@@ -142,7 +142,7 @@ export class ChargesService {
     }
 
     // 2. Update Creditor Profile if Pix Key was provided inline
-    if (dto.send_pix_button && dto.pix_key && dto.pix_key_type) {
+    if (dto.pix_key && dto.pix_key_type) {
       await this.prisma.creditorProfile.upsert({
         where: { user_id: userId },
         update: {
@@ -261,7 +261,7 @@ export class ChargesService {
       const dueDate = new Date(dto.due_date);
       const dueDateStr = dueDate.toLocaleDateString('pt-BR');
       const amountStr = (dto.amount / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-      const businessName = creditorProfile?.business_name || debtor.name;
+      const businessName = creditorProfile?.business_name || '';
 
       let message = (dto.custom_message || '')
         .replace(/{{nome}}/g, debtor.name)
@@ -270,9 +270,9 @@ export class ChargesService {
         .replace(/{{descricao}}/g, dto.description || '')
         .replace(/{{nome_empresa}}/g, businessName);
 
-      // Append chave PIX do perfil se configurada
-      if (creditorProfile?.pix_key) {
-        message += `\n\n💰 *Chave PIX (${creditorProfile.pix_key_type ?? 'PIX'}):*\n${creditorProfile.pix_key}`;
+      const pixKey = creditorProfile?.pix_key;
+      if (pixKey) {
+        message += `\n\n💰 *Chave PIX (${creditorProfile!.pix_key_type ?? 'PIX'}):*\n${pixKey}`;
       }
 
       const credentials: ZApiCredentials | undefined =
@@ -285,24 +285,25 @@ export class ChargesService {
           : undefined;
 
       try {
-        await this.whatsapp.sendText(debtor.phone, message, credentials);
+        const msgId = await this.whatsapp.sendText(debtor.phone, message, credentials);
+        zapiMessageId = msgId ?? undefined;
         whatsappStatus = 'SENT';
       } catch (err) {
         whatsappStatus = 'FAILED';
         whatsappErrorDetails = err instanceof Error ? err.message : String(err);
         this.logger.warn(`WhatsApp falhou para cobrança ${charge.id}: ${whatsappErrorDetails}`);
       }
-    }
 
-    await this.prisma.messageHistory.create({
-      data: {
-        charge_id: charge.id,
-        trigger_type: 'MANUAL',
-        status: whatsappStatus,
-        zapi_message_id: zapiMessageId,
-        error_details: whatsappErrorDetails,
-      },
-    });
+      await this.prisma.messageHistory.create({
+        data: {
+          charge_id: charge.id,
+          trigger_type: 'MANUAL',
+          status: whatsappStatus,
+          zapi_message_id: zapiMessageId,
+          error_details: whatsappErrorDetails,
+        },
+      });
+    }
 
     await this.prisma.auditLog.create({
       data: {
@@ -440,22 +441,29 @@ export class ChargesService {
       throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
     }
 
-    // Just simulating a bulk remind for now
     const charges = await this.prisma.charge.findMany({
-      where: { id: { in: chargeIds }, creditor_id: userId }
+      where: { id: { in: chargeIds }, creditor_id: userId, status: { in: ['PENDING', 'OVERDUE'] } },
     });
 
-    const validIds = charges.map(c => c.id);
-    if (validIds.length === 0) return { success: true, count: 0 };
+    if (charges.length === 0) return { success: true, count: 0 };
 
-    // Fake background job
-    for (const id of validIds) {
-      await this.prisma.messageHistory.create({
-        data: { charge_id: id, trigger_type: 'MANUAL', status: 'SENT' }
-      });
+    const today = startOfDay(new Date()).getTime();
+
+    for (const charge of charges) {
+      const dueDate = startOfDay(new Date(charge.due_date)).getTime();
+      let trigger: 'BEFORE_DUE' | 'ON_DUE' | 'OVERDUE';
+      if (dueDate > today) trigger = 'BEFORE_DUE';
+      else if (dueDate === today) trigger = 'ON_DUE';
+      else trigger = 'OVERDUE';
+
+      await this.pgBoss.send(
+        NOTIFICATION_QUEUE,
+        { chargeId: charge.id, trigger },
+        { singletonKey: `${charge.id}-manual` },
+      );
     }
 
-    return { success: true, count: validIds.length };
+    return { success: true, count: charges.length };
   }
  
   async findOneRecurring(userId: string, ruleId: string) {

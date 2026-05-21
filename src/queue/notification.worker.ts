@@ -89,9 +89,14 @@ export class NotificationWorker implements OnApplicationBootstrap {
         : undefined;
 
     try {
-      await this.whatsapp.sendText(charge.debtor.phone, message, credentials);
+      const zapiMessageId = await this.whatsapp.sendText(charge.debtor.phone, message, credentials);
       await this.prisma.messageHistory.create({
-        data: { charge_id: chargeId, trigger_type: TriggerType.MANUAL, status: 'SENT' },
+        data: {
+          charge_id: chargeId,
+          trigger_type: TriggerType.MANUAL,
+          status: 'SENT',
+          zapi_message_id: zapiMessageId ?? undefined,
+        },
       });
       this.logger.log(`Notificação manual enviada: ${charge.debtor.name} (${trigger})`);
     } catch (err) {

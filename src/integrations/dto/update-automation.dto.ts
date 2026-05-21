@@ -16,4 +16,22 @@ export class UpdateAutomationDto {
   @Min(1)
   @Max(30)
   automation_days_after?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(23)
+  send_hour?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  allow_before_due?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allow_on_due?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allow_overdue?: boolean;
 }

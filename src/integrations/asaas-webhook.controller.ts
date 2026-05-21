@@ -1,6 +1,7 @@
 import { Controller, Get, Post, HttpCode, Body, Headers, UnauthorizedException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionService } from '../subscription/subscription.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('integrations/asaas')
@@ -11,6 +12,7 @@ export class AsaasWebhookController {
     private readonly configService: ConfigService,
     @Inject(forwardRef(() => SubscriptionService))
     private readonly subscriptionService: SubscriptionService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('webhook')
@@ -64,9 +66,25 @@ export class AsaasWebhookController {
   }
 
   private async handlePaymentConfirmed(payment: any) {
-    if (!payment?.subscription) return;
-    this.logger.log(`Pagamento confirmado. Assinatura: ${payment.subscription}, Payment: ${payment.id}`);
-    await this.subscriptionService.activateSubscriptionByAsaasId(payment.subscription, payment.id);
+    // Subscription payment
+    if (payment?.subscription) {
+      this.logger.log(`Pagamento confirmado. Assinatura: ${payment.subscription}, Payment: ${payment.id}`);
+      await this.subscriptionService.activateSubscriptionByAsaasId(payment.subscription, payment.id);
+      return;
+    }
+
+    // Standalone intermediated charge payment
+    if (payment?.externalReference) {
+      this.logger.log(`Pagamento intermediado confirmado. chargeId: ${payment.externalReference}`);
+      await this.prisma.charge.updateMany({
+        where: {
+          id: payment.externalReference,
+          is_intermediated: true,
+          status: { not: 'PAID' },
+        },
+        data: { status: 'PAID', payment_date: new Date() },
+      });
+    }
   }
 
   private async handlePaymentOverdue(payment: any) {

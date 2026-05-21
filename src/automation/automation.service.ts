@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
 import { MessageTrigger, TriggerType } from '@prisma/client';
-import { addDays, startOfDay, endOfDay } from 'date-fns';
+import { addDays, differenceInCalendarDays, endOfDay, startOfDay } from 'date-fns';
 
 @Injectable()
 export class AutomationService {
@@ -15,8 +15,7 @@ export class AutomationService {
   ) {}
 
   /**
-   * Rotina diária às 00:00 AM
-   * Gera cobranças a partir de regras de recorrência.
+   * Diariamente às 00:00 UTC — gera cobranças a partir de regras de recorrência.
    */
   @Cron('0 0 * * *')
   async handleRecurringChargeGeneration() {
@@ -78,132 +77,187 @@ export class AutomationService {
   }
 
   /**
-   * Rotina diária às 00:30 AM
-   * Sincroniza status de faturas e processa automações de mensagens.
+   * A cada hora cheia (UTC) — marca OVERDUE e envia automações para credores
+   * cujo send_hour bate com a hora atual em BRT (America/Sao_Paulo, UTC-3).
    */
-  @Cron('30 0 * * *')
-  async handleDailyBillingSync() {
-    this.logger.log('Iniciando sincronização diária de cobranças (00:30)...');
-
+  @Cron('0 * * * *')
+  async handleDailyBillingSync(): Promise<void> {
+    this.logger.log('Sincronização horária iniciada...');
     try {
-      const today = startOfDay(new Date());
-
-      /**
-       * REGRA DE OURO: Atualização de Status
-       * Somente para cobranças NÃO intermediadas (PIX Direto).
-       * Cobranças via Asaas dependem de Webhook para manter a integridade com o gateway.
-       */
-      const overdueResult = await this.prisma.charge.updateMany({
-        where: {
-          status: 'PENDING',
-          is_intermediated: false, // Evita conflito com Asaas
-          due_date: {
-            lt: today,
-          },
-        },
-        data: {
-          status: 'OVERDUE',
-        },
-      });
-
-      if (overdueResult.count > 0) {
-        this.logger.log(`${overdueResult.count} cobranças (PIX Direto) marcadas como OVERDUE.`);
-      }
-
-      // 2. Processar fila de automação de mensagens
-      await this.processAutomationQueue();
-
-      this.logger.log('Sincronização diária finalizada com sucesso.');
+      await this.markOverdueCharges();
+      const currentHour = this.getBRTHour();
+      await this.processAutomationQueue(currentHour);
+      this.logger.log('Sincronização horária finalizada.');
     } catch (error) {
       this.logger.error('Erro fatal na rotina de automação:', error);
     }
   }
 
-  /**
-   * Identifica e dispara notificações baseadas em regras de tempo.
-   * Verifica permissão de automação do usuário.
-   */
-  private async processAutomationQueue() {
-    const today = startOfDay(new Date());
-    const inTwoDays = addDays(today, 2);
-    const yesterday = addDays(today, -1);
-
-    this.logger.log('Processando fila de notificações...');
-
-    // A. Lembretes de Vencimento HOJE (ON_DUE)
-    await this.notifyChargesForPeriod(today, endOfDay(today), 'ON_DUE', TriggerType.AUTO_REMINDER_DUE);
-
-    // B. Lembretes Antecipados (2 dias antes - BEFORE_DUE)
-    await this.notifyChargesForPeriod(inTwoDays, endOfDay(inTwoDays), 'BEFORE_DUE', TriggerType.AUTO_REMINDER_BEFORE);
-
-    // C. Lembretes de Atraso (1 dia após - OVERDUE)
-    await this.notifyChargesForPeriod(yesterday, endOfDay(yesterday), 'OVERDUE', TriggerType.AUTO_REMINDER_OVERDUE);
+  getBRTHour(): number {
+    return new Date(
+      new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }),
+    ).getHours();
   }
 
-  private async notifyChargesForPeriod(start: Date, end: Date, trigger: MessageTrigger, type: TriggerType) {
+  private async markOverdueCharges(): Promise<void> {
+    const today = startOfDay(new Date());
+    const result = await this.prisma.charge.updateMany({
+      where: {
+        status: 'PENDING',
+        is_intermediated: false,
+        due_date: { lt: today },
+      },
+      data: { status: 'OVERDUE' },
+    });
+    if (result.count > 0) {
+      this.logger.log(`${result.count} cobranças (PIX Direto) marcadas como OVERDUE.`);
+    }
+  }
+
+  /**
+   * Busca credores com send_hour = currentHour e dispara notificações
+   * respeitando automation_days_before/after e os flags por gatilho.
+   */
+  private async processAutomationQueue(currentHour: number): Promise<void> {
+    const today = startOfDay(new Date());
+
+    const configs = await this.prisma.integrationConfig.findMany({
+      where: {
+        allows_automation: true,
+        send_hour: currentHour,
+        user: {
+          subscription: {
+            status: 'ACTIVE',
+            plan_type: { in: ['STARTER', 'PRO', 'UNLIMITED'] },
+          },
+        },
+      },
+    });
+
+    if (configs.length === 0) return;
+
+    const creditorIds = configs.map(c => c.user_id);
+    const configMap = new Map(configs.map(c => [c.user_id, c]));
+
+    const maxDaysBefore = Math.max(...configs.map(c => c.automation_days_before));
+    const maxDaysAfter = Math.max(...configs.map(c => c.automation_days_after));
+
     const charges = await this.prisma.charge.findMany({
       where: {
+        creditor_id: { in: creditorIds },
+        status: { in: ['PENDING', 'OVERDUE'] },
         due_date: {
-          gte: start,
-          lte: end,
+          gte: addDays(today, -maxDaysAfter),
+          lte: endOfDay(addDays(today, maxDaysBefore)),
         },
-        status: trigger === 'OVERDUE' ? 'OVERDUE' : 'PENDING',
-        // REGRA: O credor deve permitir automação explicitamente
-        creditor: {
-          integration_config: {
-            allows_automation: true,
-          }
-        },
-        // REGRA: Evitar spam (não enviar se já houver mensagem para este gatilho hoje)
-        messages: {
-          none: {
-            trigger_type: type,
-            sent_at: {
-              gte: startOfDay(new Date()),
-            }
-          }
-        }
       },
       include: {
         debtor: true,
         creditor: {
           include: {
-            creditor_profile: {
-              include: {
-                message_templates: true
-              }
-            },
-            integration_config: true
-          }
-        }
-      }
+            creditor_profile: { include: { message_templates: true } },
+            integration_config: true,
+          },
+        },
+        messages: { where: { sent_at: { gte: today } } },
+      },
     });
 
-    for (const charge of charges) {
-      // Buscar template customizado ou usar o padrão do sistema
-      const template = charge.creditor.creditor_profile?.message_templates?.find(
-        t => t.trigger === trigger && (t.is_default || charge.creditor.creditor_profile?.message_templates.length === 1)
-      );
+    const eligibleCharges = charges.filter((c: any) => !c.debtor.whatsapp_opted_out);
 
-      const message = this.buildAutomaticMessage(charge, trigger, template?.body);
-      
+    const optedOut = charges.length - eligibleCharges.length;
+    this.logger.log(
+      `Processando ${eligibleCharges.length} cobrança(s) para ${configs.length} credor(es) [send_hour=${currentHour}h BRT]${optedOut > 0 ? ` (${optedOut} opt-out ignorados)` : ''}.`,
+    );
+
+    for (const charge of eligibleCharges) {
+      const config = configMap.get(charge.creditor_id);
+      if (!config) continue;
+
+      const dueDate = startOfDay(new Date(charge.due_date));
+      const diffDays = differenceInCalendarDays(dueDate, today);
+
+      let trigger: MessageTrigger | null = null;
+      let triggerType: TriggerType | null = null;
+
+      if (diffDays === config.automation_days_before && config.allow_before_due && charge.status === 'PENDING') {
+        trigger = 'BEFORE_DUE';
+        triggerType = TriggerType.AUTO_REMINDER_BEFORE;
+      } else if (diffDays === 0 && config.allow_on_due && charge.status === 'PENDING') {
+        trigger = 'ON_DUE';
+        triggerType = TriggerType.AUTO_REMINDER_DUE;
+      } else if (diffDays === -config.automation_days_after && config.allow_overdue && charge.status === 'OVERDUE') {
+        trigger = 'OVERDUE';
+        triggerType = TriggerType.AUTO_REMINDER_OVERDUE;
+      }
+
+      if (!trigger || !triggerType) continue;
+
+      const alreadySent = charge.messages.some((m: any) => m.trigger_type === triggerType);
+      if (alreadySent) continue;
+
+      await this.sendNotification(charge, trigger, triggerType);
+    }
+  }
+
+  private async sendNotification(charge: any, trigger: MessageTrigger, triggerType: TriggerType): Promise<void> {
+    const template = charge.creditor.creditor_profile?.message_templates?.find(
+      (t: any) =>
+        t.trigger === trigger &&
+        (t.is_default || charge.creditor.creditor_profile?.message_templates.length === 1),
+    );
+
+    const message = this.buildAutomaticMessage(charge, trigger, template?.body);
+
+    const integrationConfig = charge.creditor.integration_config;
+    const credentials: ZApiCredentials | undefined =
+      integrationConfig?.zapi_instance_id && integrationConfig?.zapi_instance_token
+        ? {
+            instanceId:  integrationConfig.zapi_instance_id,
+            token:       integrationConfig.zapi_instance_token,
+            clientToken: process.env.ZAPI_CLIENT_TOKEN ?? '',
+          }
+        : undefined;
+
+    try {
+      const zapiMessageId = await this.sendWithRetry(charge.debtor.phone, message, credentials);
+      await this.prisma.messageHistory.create({
+        data: {
+          charge_id: charge.id,
+          trigger_type: triggerType,
+          status: 'SENT',
+          zapi_message_id: zapiMessageId ?? undefined,
+        },
+      });
+      this.logger.log(`Notificação ${trigger} enviada: ${charge.debtor.name}`);
+    } catch (err) {
+      this.logger.error(`Erro no disparo para cobrança ${charge.id}:`, err);
       try {
-        await this.whatsapp.sendText(charge.debtor.phone, message);
-        
         await this.prisma.messageHistory.create({
           data: {
             charge_id: charge.id,
-            trigger_type: type,
-            status: 'SENT',
-            zapi_message_id: 'AUTO_' + Math.random().toString(36).substring(7),
-          }
+            trigger_type: triggerType,
+            status: 'FAILED',
+            error_details: err instanceof Error ? err.message : String(err),
+          },
         });
+      } catch {}
+    }
+  }
 
-        this.logger.log(`Notificação ${trigger} enviada: ${charge.debtor.name}`);
+  private async sendWithRetry(phone: string, message: string, credentials?: ZApiCredentials, maxAttempts = 3): Promise<string | null> {
+    let lastError: Error = new Error('Unknown Z-API error');
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.whatsapp.sendText(phone, message, credentials);
       } catch (err) {
-        this.logger.error(`Erro no disparo automático para cobrança ${charge.id}:`, err);
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxAttempts) {
+          this.logger.warn(`Z-API falhou (tentativa ${attempt}/${maxAttempts}): ${lastError.message}`);
+        }
       }
     }
+    throw lastError;
   }
 
   private buildAutomaticMessage(charge: any, trigger: string, templateBody?: string): string {
@@ -223,7 +277,6 @@ export class AutomationService {
         .replace(/{{link_pagamento}}/g, `recebefacil.com.br/pay/${charge.id}`);
     }
 
-    // Fallback para mensagens padrão do sistema (Regras de Ouro)
     const pixSuffix = `\n\n💰 *Pague via PIX (Chave):*\n${pixKey}`;
 
     if (trigger === 'BEFORE_DUE') {

@@ -22,8 +22,9 @@ export class DashboardService {
   private async getSummaryMetrics(userId: string) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
-    const [pending, overdue, sentThisMonth, totalSent, total, paid, futureRecurring] = await Promise.all([
+    const [pending, overdue, sentThisMonth, totalSent, total, paid, futureRecurring, receivedThisMonth, receivedLastMonth] = await Promise.all([
       this.prisma.charge.aggregate({ where: { creditor_id: userId, status: 'PENDING' }, _sum: { amount: true } }),
       this.prisma.charge.aggregate({ where: { creditor_id: userId, status: 'OVERDUE' }, _sum: { amount: true } }),
       this.prisma.charge.count({ where: { creditor_id: userId, created_at: { gte: startOfMonth } } }),
@@ -34,6 +35,8 @@ export class DashboardService {
         where: { creditor_id: userId, active: true, next_generation_date: { gt: now } },
         select: { amount: true, max_installments: true, _count: { select: { charges: true } } },
       }),
+      this.prisma.charge.aggregate({ where: { creditor_id: userId, status: 'PAID', payment_date: { gte: startOfMonth } }, _sum: { amount: true } }),
+      this.prisma.charge.aggregate({ where: { creditor_id: userId, status: 'PAID', payment_date: { gte: startOfLastMonth, lt: startOfMonth } }, _sum: { amount: true } }),
     ]);
 
     const conversionRate = total > 0 ? (paid / total) * 100 : 0;
@@ -51,7 +54,9 @@ export class DashboardService {
       totalFutureRecurring,
       sentThisMonth,
       totalSent,
-      conversionRate: conversionRate.toFixed(1)
+      conversionRate: conversionRate.toFixed(1),
+      totalReceivedThisMonth: receivedThisMonth._sum.amount || 0,
+      totalReceivedLastMonth: receivedLastMonth._sum.amount || 0,
     };
   }
 

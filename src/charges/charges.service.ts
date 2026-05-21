@@ -1,17 +1,26 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
+import { AsaasService } from '../integrations/asaas.service';
+import { WhatsAppService, ZApiCredentials } from '../whatsapp/whatsapp.service';
 import { CreateChargeDto } from './dto/create-charge.dto';
 import { UpdateRecurringChargeDto } from './dto/update-recurring-charge.dto';
 import { AutomateChargeDto } from './dto/automate-charge.dto';
-import { PixKeyType } from '@prisma/client';
+import { PixKeyType, TriggerType } from '@prisma/client';
 import { canSaveMoreTemplates } from '../common/plan-modules';
+import { startOfDay } from 'date-fns';
+import { PgBossService, NOTIFICATION_QUEUE } from '../queue/pg-boss.service';
 
 @Injectable()
 export class ChargesService {
+  private readonly logger = new Logger(ChargesService.name);
+
   constructor(
     private prisma: PrismaService,
     private clientsService: ClientsService,
+    private pgBoss: PgBossService,
+    private asaasService: AsaasService,
+    private whatsapp: WhatsAppService,
   ) {}
 
   async findAll(userId: string) {
@@ -32,10 +41,13 @@ export class ChargesService {
       phone: charge.debtor.phone,
       amount: charge.amount,
       dueDate: charge.due_date.toISOString().split('T')[0],
+      paymentDate: charge.payment_date ? charge.payment_date.toISOString().split('T')[0] : null,
       status: charge.status,
       recurrence: charge.recurring_charge?.frequency ?? 'ONCE',
       automationEnabled: !!charge.recurring_charge_id,
       recurringChargeId: charge.recurring_charge_id ?? null,
+      is_intermediated: charge.is_intermediated,
+      asaas_invoice_url: charge.asaas_invoice_url ?? null,
     }));
   }
 
@@ -94,9 +106,9 @@ export class ChargesService {
     const limit = planLimits[subscription.plan_type] || 0;
 
     const allowedRecurrences: Record<string, string[]> = {
-      FREE: ['ONCE'],
-      STARTER: ['ONCE', 'WEEKLY'],
-      PRO: ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
+      FREE:      ['ONCE'],
+      STARTER:   ['ONCE', 'MONTHLY'],
+      PRO:       ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
       UNLIMITED: ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
     };
 
@@ -119,8 +131,20 @@ export class ChargesService {
       throw new ForbiddenException('LIMIT_REACHED');
     }
 
+    // 1.5 Validate split prerequisites
+    let integrationConfig: Awaited<ReturnType<typeof this.prisma.integrationConfig.findUnique>> | null = null;
+    if (dto.is_intermediated) {
+      if (!['PRO', 'UNLIMITED'].includes(subscription.plan_type)) {
+        throw new ForbiddenException('SPLIT_PLAN_REQUIRED');
+      }
+      integrationConfig = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
+      if (!integrationConfig?.split_terms_accepted_at) {
+        throw new ForbiddenException('SPLIT_TERMS_NOT_ACCEPTED');
+      }
+    }
+
     // 2. Update Creditor Profile if Pix Key was provided inline
-    if (dto.send_pix_button && dto.pix_key && dto.pix_key_type) {
+    if (dto.pix_key && dto.pix_key_type) {
       await this.prisma.creditorProfile.upsert({
         where: { user_id: userId },
         update: {
@@ -195,14 +219,95 @@ export class ChargesService {
       },
     });
 
-    // 5. Create MessageHistory
-    await this.prisma.messageHistory.create({
-      data: {
-        charge_id: charge.id,
-        trigger_type: 'MANUAL',
-        status: 'PENDING',
+    // 4.5 Create Asaas payment if intermediated
+    let asaasInvoiceUrl: string | undefined;
+    if (dto.is_intermediated) {
+      const platformFeePct = subscription.plan_type === 'UNLIMITED' ? 1.0 : 2.0;
+      try {
+        const asaasResult = await this.asaasService.createIntermediatedPayment({
+          debtorName: debtor.name,
+          debtorPhone: debtor.phone,
+          amountCentavos: dto.amount,
+          dueDate: new Date(dto.due_date),
+          description: dto.description,
+          chargeId: charge.id,
+          walletId: integrationConfig?.asaas_wallet_id ?? undefined,
+          platformFeePct,
+        });
+        await this.prisma.charge.update({
+          where: { id: charge.id },
+          data: {
+            is_intermediated: true,
+            platform_fee_pct: platformFeePct,
+            asaas_payment_id: asaasResult.asaasPaymentId,
+            asaas_invoice_url: asaasResult.invoiceUrl,
+          },
+        });
+        asaasInvoiceUrl = asaasResult.invoiceUrl;
+      } catch (e) {
+        await this.prisma.charge.delete({ where: { id: charge.id } });
+        throw e;
       }
-    });
+    }
+
+    // 5. Enviar WhatsApp com a mensagem customizada
+    let whatsappStatus = 'PENDING';
+    let whatsappErrorDetails: string | undefined;
+    let zapiMessageId: string | undefined;
+
+    if (!dto.is_intermediated) {
+      // Busca perfil e config do credor para construir a mensagem
+      const [creditorProfile, integrationConfig] = await Promise.all([
+        this.prisma.creditorProfile.findUnique({ where: { user_id: userId } }),
+        this.prisma.integrationConfig.findUnique({ where: { user_id: userId } }),
+      ]);
+
+      const dueDate = new Date(dto.due_date);
+      const dueDateStr = dueDate.toLocaleDateString('pt-BR');
+      const amountStr = (dto.amount / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const businessName = creditorProfile?.business_name || '';
+
+      let message = (dto.custom_message || '')
+        .replace(/{{nome}}/g, debtor.name)
+        .replace(/{{valor}}/g, amountStr)
+        .replace(/{{vencimento}}/g, dueDateStr)
+        .replace(/{{descricao}}/g, dto.description || '')
+        .replace(/{{nome_empresa}}/g, businessName);
+
+      const pixKey = creditorProfile?.pix_key;
+      if (pixKey) {
+        message += `\n\n💰 *Chave PIX (${creditorProfile!.pix_key_type ?? 'PIX'}):*\n${pixKey}`;
+      }
+
+      const credentials: ZApiCredentials | undefined =
+        integrationConfig?.zapi_instance_id && integrationConfig?.zapi_instance_token
+          ? {
+              instanceId: integrationConfig.zapi_instance_id,
+              token: integrationConfig.zapi_instance_token,
+              clientToken: process.env.ZAPI_CLIENT_TOKEN ?? '',
+            }
+          : undefined;
+
+      try {
+        const msgId = await this.whatsapp.sendText(debtor.phone, message, credentials);
+        zapiMessageId = msgId ?? undefined;
+        whatsappStatus = 'SENT';
+      } catch (err) {
+        whatsappStatus = 'FAILED';
+        whatsappErrorDetails = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`WhatsApp falhou para cobrança ${charge.id}: ${whatsappErrorDetails}`);
+      }
+
+      await this.prisma.messageHistory.create({
+        data: {
+          charge_id: charge.id,
+          trigger_type: 'MANUAL',
+          status: whatsappStatus,
+          zapi_message_id: zapiMessageId,
+          error_details: whatsappErrorDetails,
+        },
+      });
+    }
 
     await this.prisma.auditLog.create({
       data: {
@@ -241,10 +346,7 @@ export class ChargesService {
     // Mantém a lista de clientes sincronizada
     await this.clientsService.upsertFromCharge(userId, debtor.id);
 
-    // Em um sistema real, aqui chamaria um serviço em background/filas (Ex: BullMQ)
-    // para disparar a API da Z-API caso o plano permita e o status seja PENDING
-
-    return { success: true, chargeId: charge.id };
+    return { success: true, chargeId: charge.id, ...(asaasInvoiceUrl ? { asaas_invoice_url: asaasInvoiceUrl } : {}) };
   }
 
   async updateChargeStatus(userId: string, chargeId: string, status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELED') {
@@ -343,22 +445,29 @@ export class ChargesService {
       throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
     }
 
-    // Just simulating a bulk remind for now
     const charges = await this.prisma.charge.findMany({
-      where: { id: { in: chargeIds }, creditor_id: userId }
+      where: { id: { in: chargeIds }, creditor_id: userId, status: { in: ['PENDING', 'OVERDUE'] } },
     });
 
-    const validIds = charges.map(c => c.id);
-    if (validIds.length === 0) return { success: true, count: 0 };
+    if (charges.length === 0) return { success: true, count: 0 };
 
-    // Fake background job
-    for (const id of validIds) {
-      await this.prisma.messageHistory.create({
-        data: { charge_id: id, trigger_type: 'MANUAL', status: 'SENT' }
-      });
+    const today = startOfDay(new Date()).getTime();
+
+    for (const charge of charges) {
+      const dueDate = startOfDay(new Date(charge.due_date)).getTime();
+      let trigger: 'BEFORE_DUE' | 'ON_DUE' | 'OVERDUE';
+      if (dueDate > today) trigger = 'BEFORE_DUE';
+      else if (dueDate === today) trigger = 'ON_DUE';
+      else trigger = 'OVERDUE';
+
+      await this.pgBoss.send(
+        NOTIFICATION_QUEUE,
+        { chargeId: charge.id, trigger },
+        { singletonKey: `${charge.id}-manual` },
+      );
     }
 
-    return { success: true, count: validIds.length };
+    return { success: true, count: charges.length };
   }
  
   async findOneRecurring(userId: string, ruleId: string) {
@@ -500,5 +609,22 @@ export class ChargesService {
     });
 
     return { success: true, recurringChargeId: recurringCharge.id };
+  }
+
+  async notifyNow(userId: string, chargeId: string, trigger: 'BEFORE_DUE' | 'ON_DUE' | 'OVERDUE') {
+    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
+    if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
+
+    const today = startOfDay(new Date());
+    const alreadySent = await this.prisma.messageHistory.findFirst({
+      where: { charge_id: chargeId, trigger_type: TriggerType.MANUAL, sent_at: { gte: today } },
+    });
+    if (alreadySent) throw new ConflictException('Notificação manual já enviada hoje para esta cobrança.');
+
+    await this.pgBoss.send(NOTIFICATION_QUEUE, { chargeId, trigger }, {
+      singletonKey: `${chargeId}-manual`,
+    });
+
+    return { queued: true };
   }
 }

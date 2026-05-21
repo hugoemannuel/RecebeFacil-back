@@ -1,11 +1,31 @@
-import { Controller, Get, Post, Body, UseGuards, Req, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req, Patch, Delete, HttpCode, HttpStatus } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
+import { UpdateZapiDto } from './dto/update-zapi.dto';
+import { WithdrawDto } from './dto/withdraw.dto';
 
 @Controller('integrations')
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Get('finance/balance')
+  async getFinanceBalance(@Req() req) {
+    return this.integrationsService.getFinanceBalance(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('finance/withdraw')
+  async requestWithdrawal(@Req() req, @Body() dto: WithdrawDto) {
+    return this.integrationsService.requestWithdrawal(req.user.id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('split-status')
+  async getSplitStatus(@Req() req) {
+    return this.integrationsService.getSplitStatus(req.user.id);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('asaas/split-terms')
@@ -17,6 +37,25 @@ export class IntegrationsController {
   @Post('asaas/acknowledge-split')
   async acknowledgeSplit(@Req() req, @Body() data: any) {
     return await this.integrationsService.acknowledgeSplitTerms(req.user.id, data);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('zapi')
+  async getZapi(@Req() req) {
+    return this.integrationsService.getZapiConfig(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('zapi')
+  async updateZapi(@Req() req, @Body() dto: UpdateZapiDto) {
+    return this.integrationsService.updateZapiConfig(req.user.id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('zapi')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async disconnectZapi(@Req() req) {
+    await this.integrationsService.disconnectZapi(req.user.id);
   }
 
   @UseGuards(JwtAuthGuard)

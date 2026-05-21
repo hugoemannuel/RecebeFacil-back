@@ -94,6 +94,8 @@ model User {
 
   avatar_url    String?
 
+  whatsapp_opted_out Boolean @default(false) // true = não receber mensagens automáticas
+
   // Relacionamentos de cobrança
   charges_as_creditor   Charge[]                @relation("CreditorCharges")
   charges_as_debtor     Charge[]                @relation("DebtorCharges")
@@ -174,10 +176,15 @@ model IntegrationConfig {
   // Z-API (WhatsApp)
   zapi_instance_id    String? // ID da instância Z-API do lojista (futuro: número próprio)
   zapi_instance_token String? // Token da instância Z-API
-  allows_automation   Boolean @default(true) // Opt-out de automações (se devedor enviou PARAR)
-  
-  automation_days_before Int @default(1)
-  automation_days_after  Int @default(1)
+  allows_automation   Boolean @default(true) // Master switch de automações
+  automation_days_before Int @default(2)   // Dias antes do vencimento para lembrete
+  automation_days_after  Int @default(1)   // Dias após vencimento para cobrança de atraso
+  send_hour              Int @default(9)   // Hora de envio em BRT (0-23), padrão: 9h
+
+  // Controle independente por gatilho (todos ativos por padrão)
+  allow_before_due Boolean @default(true)
+  allow_on_due     Boolean @default(true)
+  allow_overdue    Boolean @default(true)
 
   // Asaas (Gateway de pagamento para ASSINATURA do lojista)
   asaas_customer_id   String? // ID do lojista como Customer no Asaas
@@ -239,7 +246,8 @@ model Charge {
   // Flags futuras para intermediação de pagamento (split Asaas)
   is_intermediated Boolean  @default(false)
   platform_fee_pct Decimal? // % de taxa (padrão: 1.00)
-  asaas_payment_id String?  // ID da cobrança no Asaas (quando intermediada)
+  asaas_payment_id  String?  // ID da cobrança no Asaas (quando intermediada)
+  asaas_invoice_url String?  // URL de pagamento Asaas para o devedor
 
   creditor User             @relation("CreditorCharges", fields: [creditor_id], references: [id], onDelete: Cascade)
   debtor   User             @relation("DebtorCharges", fields: [debtor_id], references: [id], onDelete: Cascade)

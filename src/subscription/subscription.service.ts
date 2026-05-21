@@ -260,6 +260,18 @@ export class SubscriptionService {
    * Gera o link de checkout real do Asaas.
    */
   async createCheckout(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
+    const existing = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+    if (
+      existing?.asaas_id &&
+      existing.plan_type === planType &&
+      existing.period === period &&
+      ['ACTIVE', 'PENDING', 'OVERDUE'].includes(existing.status)
+    ) {
+      const url = await this.asaasService.getSubscriptionPaymentUrl(existing.asaas_id);
+      this.logger.log(`Checkout dedup: retornando assinatura existente ${existing.asaas_id} para ${userId}`);
+      return { invoiceUrl: url, status: existing.status, asaasId: existing.asaas_id };
+    }
+
     const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
     
     if (checkout.asaasId) {
@@ -350,6 +362,42 @@ export class SubscriptionService {
         details: { asaasId, paymentId, period: subscription.period },
       },
     });
+  }
+
+  /**
+   * Sincroniza o status da assinatura consultando o Asaas diretamente.
+   * Útil quando o webhook não chega (dev sem ngrok, falha de rede, etc.).
+   * Idempotente: só ativa se encontrar pagamento CONFIRMED/RECEIVED.
+   */
+  async syncWithAsaas(userId: string): Promise<{ activated: boolean; status: string }> {
+    const subscription = await this.prisma.subscription.findUnique({
+      where: { user_id: userId },
+    });
+
+    if (!subscription?.asaas_id) {
+      return { activated: false, status: subscription?.status ?? 'NONE' };
+    }
+
+    if (subscription.status === 'ACTIVE') {
+      return { activated: false, status: 'ACTIVE' };
+    }
+
+    const payment = await this.asaasService.getLatestPaymentForSubscription(subscription.asaas_id);
+
+    if (!payment || !['CONFIRMED', 'RECEIVED'].includes(payment.status)) {
+      this.logger.log(`Sync: pagamento não confirmado ainda para assinatura ${subscription.asaas_id}. Status: ${payment?.status ?? 'nenhum'}`);
+      return { activated: false, status: subscription.status };
+    }
+
+    if (subscription.asaas_payment_id === payment.id) {
+      this.logger.log(`Sync: pagamento ${payment.id} já processado (idempotência).`);
+      return { activated: false, status: subscription.status };
+    }
+
+    await this.activateSubscriptionByAsaasId(subscription.asaas_id, payment.id);
+    this.logger.log(`Sync: assinatura ${subscription.asaas_id} ativada via polling. Usuário: ${userId}`);
+
+    return { activated: true, status: 'ACTIVE' };
   }
 
   /**

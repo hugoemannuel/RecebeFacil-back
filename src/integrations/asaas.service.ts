@@ -96,24 +96,25 @@ export class AsaasService {
   async createPlanSubscription(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
     const customerId = await this.getOrCreateCustomer(userId, document);
     
-    // Definição de valores (Poderia vir de uma tabela de Planos futuramente)
-    const prices = {
-      [PlanType.FREE]: 0,
-      [PlanType.STARTER]: 49.90,
-      [PlanType.PRO]: 99.90,
-      [PlanType.UNLIMITED]: 199.90,
+    const prices: Record<string, { monthly: number; yearly: number }> = {
+      [PlanType.FREE]:      { monthly: 0,   yearly: 0 },
+      [PlanType.STARTER]:   { monthly: 59,  yearly: 564 },   // 20% off = R$47/mês
+      [PlanType.PRO]:       { monthly: 99,  yearly: 948 },   // 20% off = R$79/mês
+      [PlanType.UNLIMITED]: { monthly: 189, yearly: 1812 },  // 20% off = R$151/mês
     };
 
-    const value = prices[planType];
-    if (value === 0) return { status: 'FREE_PLAN' };
+    const planPrice = prices[planType];
+    if (!planPrice || planPrice.monthly === 0) return { status: 'FREE_PLAN' };
+
+    const value = period === 'YEARLY' ? planPrice.yearly : planPrice.monthly;
 
     const payload = {
       customer: customerId,
       billingType: 'UNDEFINED',
-      value: period === 'YEARLY' ? value * 10 : value,
+      value,
       nextDueDate: new Date().toISOString().split('T')[0],
       cycle: period === 'YEARLY' ? 'YEARLY' : 'MONTHLY',
-      description: `Plano RecebeFácil: ${planType} (${period})`,
+      description: `Plano RecebeFácil ${planType} (${period === 'YEARLY' ? 'Anual' : 'Mensal'})`,
     };
 
     this.logger.log(`Criando assinatura ${planType} para o cliente ${customerId}. Período: ${period}`);
@@ -160,6 +161,209 @@ export class AsaasService {
       const asaasError = error.response?.data?.errors?.[0]?.description || error.message;
       this.logger.error(`Erro ao criar assinatura no Asaas: ${asaasError}`, error.response?.data);
       throw new HttpException(`Erro no Asaas: ${asaasError}`, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
+  async getSubscriptionPaymentUrl(asaasId: string): Promise<string | null> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/subscriptions/${asaasId}/payments`, { headers: this.headers }),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      const pending = payments.find((p: any) => p.status === 'PENDING') ?? payments[0];
+      return pending?.invoiceUrl ?? pending?.bankSlipUrl ?? pending?.checkoutUrl ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Cria subconta Asaas para o lojista e salva walletId + accountKey no IntegrationConfig.
+   * Necessário para que o split de receita funcione.
+   */
+  async createSubaccount(userId: string, document?: string): Promise<{ walletId: string; accountKey: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { creditor_profile: true },
+    });
+
+    if (!user) throw new HttpException('Usuário não encontrado', HttpStatus.NOT_FOUND);
+
+    const cpfCnpj = document || user.creditor_profile?.document;
+
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/accounts`,
+          {
+            name: user.name,
+            email: user.email,
+            cpfCnpj,
+            mobilePhone: (user as any).phone || '',
+            accountType: 'INDIVIDUAL',
+          },
+          { headers: this.headers },
+        ),
+      );
+
+      const walletId: string = resp.data.walletId;
+      const accountKey: string = resp.data.apiKey;
+
+      await this.prisma.integrationConfig.upsert({
+        where: { user_id: userId },
+        update: { asaas_wallet_id: walletId, asaas_account_key: accountKey },
+        create: { user_id: userId, asaas_wallet_id: walletId, asaas_account_key: accountKey },
+      });
+
+      this.logger.log(`Subconta Asaas criada para usuário ${userId}. WalletId: ${walletId}`);
+      return { walletId, accountKey };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar subconta no Asaas';
+      this.logger.error(`Erro ao criar subconta Asaas: ${msg}`, error.response?.data);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
+  /**
+   * Cria um pagamento avulso no Asaas para cobrança intermediada.
+   * Quando walletId e platformFeePct fornecidos, aplica split automático:
+   * lojista recebe (100 - platformFeePct)% e a plataforma retém platformFeePct%.
+   * O externalReference é o ID interno da cobrança para reconciliação no webhook.
+   */
+  async createIntermediatedPayment(data: {
+    debtorName: string;
+    debtorPhone: string;
+    amountCentavos: number;
+    dueDate: Date;
+    description: string;
+    chargeId: string;
+    walletId?: string;
+    platformFeePct?: number;
+  }): Promise<{ asaasPaymentId: string; invoiceUrl: string }> {
+    // 1. Criar cliente devedor no Asaas
+    let debtorCustomerId: string;
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/customers`,
+          {
+            name: data.debtorName,
+            mobilePhone: data.debtorPhone,
+            externalReference: `debtor_${data.chargeId}`,
+            notificationDisabled: true,
+          },
+          { headers: this.headers },
+        ),
+      );
+      debtorCustomerId = resp.data.id;
+      this.logger.log(`Cliente devedor criado no Asaas: ${debtorCustomerId}`);
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar cliente devedor no Asaas';
+      this.logger.error(`Erro ao criar cliente devedor: ${msg}`);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+
+    // 2. Criar cobrança avulsa
+    const split =
+      data.walletId && data.platformFeePct !== undefined
+        ? [{ walletId: data.walletId, percentualValue: 100 - data.platformFeePct }]
+        : undefined;
+
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/payments`,
+          {
+            customer: debtorCustomerId,
+            billingType: 'UNDEFINED',
+            value: data.amountCentavos / 100,
+            dueDate: data.dueDate.toISOString().split('T')[0],
+            description: data.description,
+            externalReference: data.chargeId,
+            notificationDisabled: false,
+            ...(split && { split }),
+          },
+          { headers: this.headers },
+        ),
+      );
+      const payment = resp.data;
+      const invoiceUrl = payment.invoiceUrl || payment.bankSlipUrl || payment.checkoutUrl || '';
+      this.logger.log(`Pagamento intermediado criado: ${payment.id}`);
+      return { asaasPaymentId: payment.id, invoiceUrl };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha ao criar cobrança no Asaas';
+      this.logger.error(`Erro ao criar pagamento intermediado: ${msg}`);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
+  /**
+   * Retorna o status do pagamento mais recente de uma assinatura Asaas.
+   * Usado pelo sync para ativar assinaturas quando o webhook não chegou.
+   */
+  async getLatestPaymentForSubscription(asaasId: string): Promise<{ id: string; status: string } | null> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(
+          `${this.baseUrl}/subscriptions/${asaasId}/payments`,
+          { headers: this.headers },
+        ),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      if (!payments.length) return null;
+      // Prioriza o mais recente com status confirmado
+      const confirmed = payments.find((p) => ['CONFIRMED', 'RECEIVED'].includes(p.status));
+      return confirmed ?? payments[0] ?? null;
+    } catch (error) {
+      this.logger.warn(`Erro ao buscar pagamentos da assinatura ${asaasId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Retorna o saldo disponível na subconta do lojista.
+   * Usa a API key da subconta (asaas_account_key), não a chave da plataforma.
+   */
+  async getAccountBalance(accountKey: string): Promise<{ balance: number }> {
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/finance/balance`, {
+          headers: { 'Content-Type': 'application/json', access_token: accountKey },
+        }),
+      );
+      return { balance: resp.data.balance ?? 0 };
+    } catch (error) {
+      this.logger.warn(`Erro ao consultar saldo Asaas: ${error.message}`);
+      return { balance: 0 };
+    }
+  }
+
+  /**
+   * Transfere via PIX da subconta do lojista para a chave PIX informada.
+   * Usa a API key da subconta (asaas_account_key), não a chave da plataforma.
+   */
+  async transferViaPixFromSubaccount(accountKey: string, data: {
+    value: number;
+    pixKey: string;
+    pixKeyType: string;
+  }): Promise<{ id: string; status: string }> {
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/transfers`,
+          {
+            value: data.value,
+            pixAddressKey: data.pixKey,
+            pixAddressKeyType: data.pixKeyType,
+          },
+          { headers: { 'Content-Type': 'application/json', access_token: accountKey } },
+        ),
+      );
+      return { id: resp.data.id, status: resp.data.status };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha na transferência PIX';
+      this.logger.error(`Erro na transferência PIX: ${msg}`, error.response?.data);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
     }
   }
 

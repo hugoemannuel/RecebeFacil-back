@@ -3,6 +3,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AsaasWebhookController } from './asaas-webhook.controller';
 import { SubscriptionService } from '../subscription/subscription.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 describe('AsaasWebhookController', () => {
   let controller: AsaasWebhookController;
@@ -21,12 +22,17 @@ describe('AsaasWebhookController', () => {
     cancelSubscription: jest.fn(),
   };
 
+  const mockPrisma = {
+    charge: { updateMany: jest.fn() },
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AsaasWebhookController],
       providers: [
         { provide: ConfigService, useValue: mockConfigService },
         { provide: SubscriptionService, useValue: mockSubscriptionService },
+        { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
     controller = module.get<AsaasWebhookController>(AsaasWebhookController);
@@ -128,12 +134,41 @@ describe('AsaasWebhookController', () => {
       expect(mockSubscriptionService.activateSubscriptionByAsaasId).not.toHaveBeenCalled();
     });
 
-    it('deve não chamar service quando payment.subscription está ausente em PAYMENT_CONFIRMED', async () => {
+    it('deve não chamar service quando payment.subscription e externalReference ausentes em PAYMENT_CONFIRMED', async () => {
       const body = { event: 'PAYMENT_CONFIRMED', payment: { id: 'pay-x', subscription: null } };
-      mockSubscriptionService.activateSubscriptionByAsaasId.mockResolvedValueOnce(undefined);
 
       await controller.handleWebhook(body, 'secret-token');
       expect(mockSubscriptionService.activateSubscriptionByAsaasId).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('deve marcar cobrança como PAID quando PAYMENT_CONFIRMED de pagamento intermediado', async () => {
+      const body = {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay-intermediated', subscription: null, externalReference: 'charge-uuid-1' },
+      };
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await controller.handleWebhook(body, 'secret-token');
+
+      expect(mockSubscriptionService.activateSubscriptionByAsaasId).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'charge-uuid-1', is_intermediated: true }),
+          data: expect.objectContaining({ status: 'PAID' }),
+        }),
+      );
+    });
+
+    it('deve marcar cobrança como PAID no PAYMENT_RECEIVED intermediado', async () => {
+      const body = {
+        event: 'PAYMENT_RECEIVED',
+        payment: { id: 'pay-r', subscription: null, externalReference: 'charge-uuid-2' },
+      };
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockPrisma.charge.updateMany).toHaveBeenCalled();
     });
   });
 });

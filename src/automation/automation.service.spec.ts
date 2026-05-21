@@ -1,7 +1,36 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { addDays } from 'date-fns';
 import { AutomationService } from './automation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+
+const makeConfig = (overrides: Partial<Record<string, any>> = {}) => ({
+  user_id: 'user-1',
+  allows_automation: true,
+  send_hour: 9,
+  automation_days_before: 2,
+  automation_days_after: 1,
+  allow_before_due: true,
+  allow_on_due: true,
+  allow_overdue: true,
+  ...overrides,
+});
+
+const makeCharge = (overrides: Partial<Record<string, any>> = {}) => ({
+  id: 'c1',
+  amount: 10000,
+  due_date: new Date(),
+  status: 'PENDING',
+  creditor_id: 'user-1',
+  messages: [],
+  debtor: { id: 'debtor-1', name: 'João', phone: '5511999999999', whatsapp_opted_out: false },
+  creditor: {
+    name: 'Loja',
+    creditor_profile: { business_name: 'Loja LTDA', pix_key: '123', message_templates: [] },
+    integration_config: makeConfig(),
+  },
+  ...overrides,
+});
 
 describe('AutomationService', () => {
   let service: AutomationService;
@@ -14,6 +43,9 @@ describe('AutomationService', () => {
     charge: {
       create: jest.fn(),
       updateMany: jest.fn(),
+      findMany: jest.fn(),
+    },
+    integrationConfig: {
       findMany: jest.fn(),
     },
     messageHistory: { create: jest.fn() },
@@ -102,10 +134,14 @@ describe('AutomationService', () => {
 
   // ─── handleDailyBillingSync ───────────────────────────────────
   describe('handleDailyBillingSync', () => {
+    beforeEach(() => {
+      // Fixa o getBRTHour para retornar 9 em todos os testes deste bloco
+      jest.spyOn(service, 'getBRTHour').mockReturnValue(9);
+    });
+
     it('deve marcar cobranças PENDING vencidas como OVERDUE', async () => {
       mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 3 });
-      // processAutomationQueue chama charge.findMany
-      mockPrisma.charge.findMany.mockResolvedValue([]);
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([]);
 
       await service.handleDailyBillingSync();
 
@@ -119,46 +155,199 @@ describe('AutomationService', () => {
 
     it('deve executar sem erros quando não há cobranças para processar', async () => {
       mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
-      mockPrisma.charge.findMany.mockResolvedValue([]);
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([]);
+
       await expect(service.handleDailyBillingSync()).resolves.not.toThrow();
     });
 
-    it('deve enviar WhatsApp para cobranças elegíveis', async () => {
+    it('deve enviar WhatsApp para cobrança ON_DUE elegível', async () => {
       mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
-      mockPrisma.charge.findMany.mockResolvedValue([
-        {
-          id: 'c1', amount: 10000, due_date: new Date(), status: 'PENDING',
-          debtor: { id: 'debtor-1', name: 'João', phone: '11999' },
-          creditor: {
-            name: 'Loja',
-            creditor_profile: { business_name: 'Loja LTDA', pix_key: '123', message_templates: [] },
-            integration_config: { allows_automation: true },
-          },
-        },
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
       ]);
       mockWhatsapp.sendText.mockResolvedValue(undefined);
       mockPrisma.messageHistory.create.mockResolvedValue({});
 
       await service.handleDailyBillingSync();
-      expect(mockWhatsapp.sendText).toHaveBeenCalled();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(1);
     });
 
-    it('deve continuar mesmo se WhatsApp falhar para uma cobrança', async () => {
+    it('deve continuar mesmo se WhatsApp falhar para uma cobrança (registra FAILED)', async () => {
       mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
-      mockPrisma.charge.findMany.mockResolvedValue([
-        {
-          id: 'c1', amount: 10000, due_date: new Date(), status: 'PENDING',
-          debtor: { id: 'debtor-1', name: 'João', phone: '11999' },
-          creditor: {
-            name: 'Loja',
-            creditor_profile: { business_name: 'Loja', pix_key: '123', message_templates: [] },
-            integration_config: { allows_automation: true },
-          },
-        },
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
       ]);
       mockWhatsapp.sendText.mockRejectedValue(new Error('Z-API offline'));
+      mockPrisma.messageHistory.create.mockResolvedValue({});
 
       await expect(service.handleDailyBillingSync()).resolves.not.toThrow();
+      expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+      );
+    });
+
+    it('deve tentar 3 vezes antes de desistir (retry)', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
+      ]);
+      mockWhatsapp.sendText.mockRejectedValue(new Error('Z-API timeout'));
+      mockPrisma.messageHistory.create.mockResolvedValue({});
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(3);
+    });
+
+    it('deve enviar na segunda tentativa quando primeira falha (retry recovery)', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
+      ]);
+      mockWhatsapp.sendText
+        .mockRejectedValueOnce(new Error('Z-API timeout'))
+        .mockResolvedValueOnce(undefined);
+      mockPrisma.messageHistory.create.mockResolvedValue({});
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.messageHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'SENT' }) }),
+      );
+    });
+
+    it('não deve enviar para devedor com opt-out ativo', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({
+          due_date: new Date(),
+          status: 'PENDING',
+          messages: [],
+          debtor: { id: 'debtor-1', name: 'João', phone: '5511999999999', whatsapp_opted_out: true },
+        }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    // ─── send_hour ────────────────────────────────────────────────
+    it('não deve processar automação quando nenhum credor tem send_hour da hora atual', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      // send_hour=14, mas hora atual mockada é 9
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockPrisma.charge.findMany).not.toHaveBeenCalled();
+    });
+
+    it('deve processar credor cujo send_hour bate com a hora BRT atual', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig({ send_hour: 9 })]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockPrisma.integrationConfig.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ send_hour: 9 }) }),
+      );
+    });
+
+    // ─── flags por gatilho ────────────────────────────────────────
+    it('não deve enviar BEFORE_DUE quando allow_before_due = false', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([
+        makeConfig({ allow_before_due: false, automation_days_before: 2 }),
+      ]);
+      // Cobrança vence em 2 dias (BEFORE_DUE)
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: addDays(new Date(), 2), status: 'PENDING', messages: [] }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('não deve enviar ON_DUE quando allow_on_due = false', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([
+        makeConfig({ allow_on_due: false }),
+      ]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: new Date(), status: 'PENDING', messages: [] }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('não deve enviar OVERDUE quando allow_overdue = false', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([
+        makeConfig({ allow_overdue: false, automation_days_after: 1 }),
+      ]);
+      // Cobrança venceu ontem (OVERDUE)
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: addDays(new Date(), -1), status: 'OVERDUE', messages: [] }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('não deve enviar quando master switch allows_automation = false', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      // Query Prisma já filtra allows_automation = true, então retorna []
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('não deve enviar se a cobrança já recebeu mensagem ON_DUE hoje (anti-spam)', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([makeConfig()]);
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({
+          due_date: new Date(),
+          status: 'PENDING',
+          messages: [{ trigger_type: 'AUTO_REMINDER_DUE', sent_at: new Date() }],
+        }),
+      ]);
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).not.toHaveBeenCalled();
+    });
+
+    it('deve usar automation_days_before do config para BEFORE_DUE', async () => {
+      mockPrisma.charge.updateMany.mockResolvedValueOnce({ count: 0 });
+      mockPrisma.integrationConfig.findMany.mockResolvedValueOnce([
+        makeConfig({ automation_days_before: 3 }),
+      ]);
+      // Cobrança em 3 dias → deve disparar BEFORE_DUE
+      mockPrisma.charge.findMany.mockResolvedValueOnce([
+        makeCharge({ due_date: addDays(new Date(), 3), status: 'PENDING', messages: [] }),
+      ]);
+      mockWhatsapp.sendText.mockResolvedValue(undefined);
+      mockPrisma.messageHistory.create.mockResolvedValue({});
+
+      await service.handleDailyBillingSync();
+
+      expect(mockWhatsapp.sendText).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -41,6 +41,7 @@ export class ChargesService {
       phone: charge.debtor.phone,
       amount: charge.amount,
       dueDate: charge.due_date.toISOString().split('T')[0],
+      paymentDate: charge.payment_date ? charge.payment_date.toISOString().split('T')[0] : null,
       status: charge.status,
       recurrence: charge.recurring_charge?.frequency ?? 'ONCE',
       automationEnabled: !!charge.recurring_charge_id,

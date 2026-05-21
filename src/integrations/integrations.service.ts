@@ -207,15 +207,17 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
   async getFinanceBalance(userId: string): Promise<{ balance: number; hasSubaccount: boolean }> {
     const config = await this.prisma.integrationConfig.findUnique({
       where: { user_id: userId },
-      select: { asaas_account_key: true },
+      select: { asaas_account_key: true, split_terms_accepted_at: true },
     });
 
+    const hasSubaccount = !!config?.split_terms_accepted_at;
+
     if (!config?.asaas_account_key) {
-      return { balance: 0, hasSubaccount: false };
+      return { balance: 0, hasSubaccount };
     }
 
     const { balance } = await this.asaasService.getAccountBalance(config.asaas_account_key);
-    return { balance, hasSubaccount: true };
+    return { balance, hasSubaccount };
   }
 
   async requestWithdrawal(userId: string, data: {

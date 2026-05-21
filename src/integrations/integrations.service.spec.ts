@@ -206,6 +206,51 @@ describe('IntegrationsService', () => {
     });
   });
 
+  // ─── getFinanceBalance ────────────────────────────────────────
+  describe('getFinanceBalance', () => {
+    it('deve retornar hasSubaccount true e balance real quando termos aceitos e accountKey presente', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        split_terms_accepted_at: new Date(),
+        asaas_account_key: 'key_ok',
+      });
+      mockAsaas.getAccountBalance = jest.fn().mockResolvedValueOnce({ balance: 150 });
+
+      const result = await service.getFinanceBalance('user-1');
+      expect(result.hasSubaccount).toBe(true);
+      expect(result.balance).toBe(150);
+    });
+
+    it('deve retornar hasSubaccount true e balance 0 quando termos aceitos mas accountKey ausente', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        split_terms_accepted_at: new Date(),
+        asaas_account_key: null,
+      });
+
+      const result = await service.getFinanceBalance('user-1');
+      expect(result.hasSubaccount).toBe(true);
+      expect(result.balance).toBe(0);
+    });
+
+    it('deve retornar hasSubaccount false quando termos não aceitos', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
+        split_terms_accepted_at: null,
+        asaas_account_key: null,
+      });
+
+      const result = await service.getFinanceBalance('user-1');
+      expect(result.hasSubaccount).toBe(false);
+      expect(result.balance).toBe(0);
+    });
+
+    it('deve retornar hasSubaccount false quando config não existe', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce(null);
+
+      const result = await service.getFinanceBalance('user-1');
+      expect(result.hasSubaccount).toBe(false);
+      expect(result.balance).toBe(0);
+    });
+  });
+
   // ─── updateAutomationConfig ───────────────────────────────────
   describe('updateAutomationConfig', () => {
     it('deve fazer upsert da configuração', async () => {

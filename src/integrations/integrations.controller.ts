@@ -3,10 +3,23 @@ import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
 import { UpdateZapiDto } from './dto/update-zapi.dto';
+import { WithdrawDto } from './dto/withdraw.dto';
 
 @Controller('integrations')
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Get('finance/balance')
+  async getFinanceBalance(@Req() req) {
+    return this.integrationsService.getFinanceBalance(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('finance/withdraw')
+  async requestWithdrawal(@Req() req, @Body() dto: WithdrawDto) {
+    return this.integrationsService.requestWithdrawal(req.user.id, dto);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('split-status')

@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AsaasService } from './asaas.service';
 
@@ -202,6 +202,51 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
     });
 
     return config;
+  }
+
+  async getFinanceBalance(userId: string): Promise<{ balance: number; hasSubaccount: boolean }> {
+    const config = await this.prisma.integrationConfig.findUnique({
+      where: { user_id: userId },
+      select: { asaas_account_key: true },
+    });
+
+    if (!config?.asaas_account_key) {
+      return { balance: 0, hasSubaccount: false };
+    }
+
+    const { balance } = await this.asaasService.getAccountBalance(config.asaas_account_key);
+    return { balance, hasSubaccount: true };
+  }
+
+  async requestWithdrawal(userId: string, data: {
+    value: number;
+    pixKey: string;
+    pixKeyType: string;
+  }): Promise<{ id: string; status: string }> {
+    if (data.value <= 0) throw new BadRequestException('Valor deve ser maior que zero.');
+
+    const config = await this.prisma.integrationConfig.findUnique({
+      where: { user_id: userId },
+      select: { asaas_account_key: true },
+    });
+
+    if (!config?.asaas_account_key) {
+      throw new ForbiddenException('Subconta Asaas não configurada. Aceite os termos de intermediação para habilitar saques.');
+    }
+
+    const result = await this.asaasService.transferViaPixFromSubaccount(config.asaas_account_key, data);
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'WITHDRAWAL_REQUESTED',
+        entity: 'IntegrationConfig',
+        entity_id: userId,
+        details: { value: data.value, pixKeyType: data.pixKeyType },
+      },
+    });
+
+    return result;
   }
 
   async getSplitStatus(userId: string): Promise<{ accepted: boolean }> {

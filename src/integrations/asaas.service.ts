@@ -320,6 +320,53 @@ export class AsaasService {
     }
   }
 
+  /**
+   * Retorna o saldo disponível na subconta do lojista.
+   * Usa a API key da subconta (asaas_account_key), não a chave da plataforma.
+   */
+  async getAccountBalance(accountKey: string): Promise<{ balance: number }> {
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/finance/balance`, {
+          headers: { 'Content-Type': 'application/json', access_token: accountKey },
+        }),
+      );
+      return { balance: resp.data.balance ?? 0 };
+    } catch (error) {
+      this.logger.warn(`Erro ao consultar saldo Asaas: ${error.message}`);
+      return { balance: 0 };
+    }
+  }
+
+  /**
+   * Transfere via PIX da subconta do lojista para a chave PIX informada.
+   * Usa a API key da subconta (asaas_account_key), não a chave da plataforma.
+   */
+  async transferViaPixFromSubaccount(accountKey: string, data: {
+    value: number;
+    pixKey: string;
+    pixKeyType: string;
+  }): Promise<{ id: string; status: string }> {
+    try {
+      const resp = await firstValueFrom(
+        this.httpService.post(
+          `${this.baseUrl}/transfers`,
+          {
+            value: data.value,
+            pixAddressKey: data.pixKey,
+            pixAddressKeyType: data.pixKeyType,
+          },
+          { headers: { 'Content-Type': 'application/json', access_token: accountKey } },
+        ),
+      );
+      return { id: resp.data.id, status: resp.data.status };
+    } catch (error) {
+      const msg = error.response?.data?.errors?.[0]?.description || 'Falha na transferência PIX';
+      this.logger.error(`Erro na transferência PIX: ${msg}`, error.response?.data);
+      throw new HttpException(msg, HttpStatus.BAD_GATEWAY);
+    }
+  }
+
   async cancelSubscription(asaasId: string): Promise<void> {
     try {
       await firstValueFrom(

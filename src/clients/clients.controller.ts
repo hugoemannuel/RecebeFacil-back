@@ -3,9 +3,12 @@ import { AuthGuard } from '@nestjs/passport';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { PlanGuard } from '../common/plan.guard';
+import { RequiresModule } from '../common/requires-module.decorator';
 
 @Controller('clients')
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), PlanGuard)
+@RequiresModule('CLIENTS')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 

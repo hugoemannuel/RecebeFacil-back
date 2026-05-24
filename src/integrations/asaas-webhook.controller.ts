@@ -58,6 +58,14 @@ export class AsaasWebhookController {
         await this.handleSubscriptionCanceled(body.subscription, event);
         break;
 
+      case 'TRANSFER_DONE':
+        await this.handleTransferDone(body.transfer);
+        break;
+
+      case 'TRANSFER_FAILED':
+        await this.handleTransferFailed(body.transfer);
+        break;
+
       default:
         this.logger.debug(`Evento ignorado: ${event}`);
     }
@@ -106,5 +114,62 @@ export class AsaasWebhookController {
     if (!asaasId) return;
     this.logger.warn(`Assinatura cancelada no Asaas (${event}). ID: ${asaasId}`);
     await this.subscriptionService.downgradeByAsaasId(asaasId, event);
+  }
+
+  private async handleTransferDone(transfer: any) {
+    const transferId = transfer?.id;
+    if (!transferId) return;
+    this.logger.log(`Transferência confirmada. Asaas Transfer ID: ${transferId}`);
+
+    const updated = await this.prisma.withdrawalRecord.updateMany({
+      where: { asaas_transfer_id: transferId, status: { not: 'CONFIRMED' } },
+      data: { status: 'CONFIRMED', asaas_status: transfer.status ?? 'DONE', confirmed_at: new Date() },
+    });
+
+    if (updated.count > 0) {
+      const record = await this.prisma.withdrawalRecord.findFirst({
+        where: { asaas_transfer_id: transferId },
+      });
+      if (record) {
+        await this.prisma.auditLog.create({
+          data: {
+            user_id: record.user_id,
+            action: 'WITHDRAWAL_CONFIRMED',
+            entity: 'WithdrawalRecord',
+            entity_id: record.id,
+            details: { asaas_transfer_id: transferId },
+          },
+        });
+      }
+    }
+  }
+
+  private async handleTransferFailed(transfer: any) {
+    const transferId = transfer?.id;
+    if (!transferId) return;
+    const failureReason = transfer?.failReason ?? transfer?.observations ?? 'Transferência recusada pelo Asaas';
+    this.logger.warn(`Transferência falhou. Asaas Transfer ID: ${transferId}. Motivo: ${failureReason}`);
+
+    const updated = await this.prisma.withdrawalRecord.updateMany({
+      where: { asaas_transfer_id: transferId, status: { not: 'FAILED' } },
+      data: { status: 'FAILED', asaas_status: transfer.status ?? 'FAILED', failure_reason: failureReason, failed_at: new Date() },
+    });
+
+    if (updated.count > 0) {
+      const record = await this.prisma.withdrawalRecord.findFirst({
+        where: { asaas_transfer_id: transferId },
+      });
+      if (record) {
+        await this.prisma.auditLog.create({
+          data: {
+            user_id: record.user_id,
+            action: 'WITHDRAWAL_FAILED',
+            entity: 'WithdrawalRecord',
+            entity_id: record.id,
+            details: { asaas_transfer_id: transferId, reason: failureReason },
+          },
+        });
+      }
+    }
   }
 }

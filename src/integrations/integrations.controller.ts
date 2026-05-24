@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, UseGuards, Req, Patch, Delete, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req, Patch, Delete, HttpCode, HttpStatus, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { IntegrationsService } from './integrations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateAutomationDto } from './dto/update-automation.dto';
@@ -17,8 +18,19 @@ export class IntegrationsController {
 
   @UseGuards(JwtAuthGuard)
   @Post('finance/withdraw')
+  @Throttle({ default: { ttl: 60000, limit: 1 } })
   async requestWithdrawal(@Req() req, @Body() dto: WithdrawDto) {
     return this.integrationsService.requestWithdrawal(req.user.id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('finance/withdrawals')
+  async getWithdrawals(
+    @Req() req,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationsService.getWithdrawals(req.user.id, Number(page) || 1, Number(limit) || 10);
   }
 
   @UseGuards(JwtAuthGuard)

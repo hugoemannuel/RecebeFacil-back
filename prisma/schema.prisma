@@ -79,6 +79,14 @@ enum MessageTrigger {
   OVERDUE
 }
 
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+  REVERSED
+}
+
 // ==========================================
 // IDENTIDADE & AUTENTICAÇÃO
 // User contém APENAS dados de auth. Regra de Ouro do projeto.
@@ -107,10 +115,11 @@ model User {
   clients_as_debtor   Client[] @relation("DebtorClients")
 
   // Perfis e configurações (tabelas separadas — segurança por contenção)
-  creditor_profile  CreditorProfile?
-  subscription      Subscription?
+  creditor_profile   CreditorProfile?
+  subscription       Subscription?
   integration_config IntegrationConfig?
-  audit_logs        AuditLog[]          @relation("UserAuditLogs")
+  audit_logs         AuditLog[]          @relation("UserAuditLogs")
+  withdrawals        WithdrawalRecord[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -349,6 +358,37 @@ model AuditLog {
   user User? @relation("UserAuditLogs", fields: [user_id], references: [id], onDelete: SetNull)
 
   created_at DateTime @default(now())
+}
+
+// ==========================================
+// SAQUES
+// idempotency_key: UUID gerado pelo front-end — garante que o mesmo request
+// não executa dois PIX mesmo em retries ou cliques duplos.
+// pix_key_masked: versão mascarada para exibição no histórico (nunca armazenar a chave completa).
+// ==========================================
+
+model WithdrawalRecord {
+  id                String           @id @default(uuid())
+  user_id           String
+  idempotency_key   String           @unique
+  value             Decimal          @db.Decimal(10, 2)
+  pix_key_masked    String
+  pix_key_type      String
+  status            WithdrawalStatus @default(PENDING)
+  asaas_transfer_id String?
+  asaas_status      String?
+  failure_reason    String?
+  processed_at      DateTime?
+  confirmed_at      DateTime?
+  failed_at         DateTime?
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([user_id, created_at])
+  @@index([asaas_transfer_id])
 }
 
 // ==========================================

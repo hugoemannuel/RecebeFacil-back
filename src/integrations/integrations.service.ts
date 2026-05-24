@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger, BadRequestException, ConflictException, BadGatewayException, HttpException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AsaasService } from './asaas.service';
 import { CryptoService } from '../common/crypto.service';
@@ -227,32 +227,155 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
     value: number;
     pixKey: string;
     pixKeyType: string;
-  }): Promise<{ id: string; status: string }> {
+    idempotencyKey: string;
+  }): Promise<{ id: string; status: string; asaas_transfer_id?: string }> {
     if (data.value <= 0) throw new BadRequestException('Valor deve ser maior que zero.');
+    if (data.value < 0.10) throw new BadRequestException('Valor mínimo para saque é R$ 0,10.');
 
+    // Idempotência: mesmo UUID → retornar registro existente sem reprocessar
+    const existing = await this.prisma.withdrawalRecord.findUnique({
+      where: { idempotency_key: data.idempotencyKey },
+    });
+    if (existing) {
+      if (['PENDING', 'PROCESSING', 'CONFIRMED'].includes(existing.status)) {
+        this.logger.log(`Saque idempotente retornado. Key: ${data.idempotencyKey}, status: ${existing.status}`);
+        return { id: existing.id, status: existing.status, asaas_transfer_id: existing.asaas_transfer_id ?? undefined };
+      }
+      throw new ConflictException('Esta solicitação já foi processada. Gere uma nova chave de idempotência para tentar novamente.');
+    }
+
+    // Obter e descriptografar a account key da subconta
     const config = await this.prisma.integrationConfig.findUnique({
       where: { user_id: userId },
       select: { asaas_account_key: true },
     });
-
     if (!config?.asaas_account_key) {
       throw new ForbiddenException('Subconta Asaas não configurada. Aceite os termos de intermediação para habilitar saques.');
     }
-
     const accountKey = this.crypto.decrypt(config.asaas_account_key);
-    const result = await this.asaasService.transferViaPixFromSubaccount(accountKey, data);
 
-    await this.prisma.auditLog.create({
-      data: {
-        user_id: userId,
-        action: 'WITHDRAWAL_REQUESTED',
-        entity: 'IntegrationConfig',
-        entity_id: userId,
-        details: { value: data.value, pixKeyType: data.pixKeyType },
-      },
-    });
+    // Verificar saldo em tempo real no Asaas
+    const { balance } = await this.asaasService.getAccountBalance(accountKey);
+    if (balance < data.value) {
+      throw new BadRequestException(`Saldo insuficiente. Disponível: R$ ${balance.toFixed(2)}`);
+    }
 
-    return result;
+    // Criar registro com proteção contra saques simultâneos do mesmo usuário
+    let record: any;
+    try {
+      record = await this.prisma.$transaction(async (tx) => {
+        const concurrent = await tx.withdrawalRecord.findFirst({
+          where: { user_id: userId, status: { in: ['PENDING', 'PROCESSING'] } },
+        });
+        if (concurrent) {
+          throw new ConflictException('Já existe um saque em andamento. Aguarde a confirmação antes de solicitar novo saque.');
+        }
+        return tx.withdrawalRecord.create({
+          data: {
+            user_id: userId,
+            idempotency_key: data.idempotencyKey,
+            value: data.value,
+            pix_key_masked: this.maskPixKey(data.pixKey, data.pixKeyType),
+            pix_key_type: data.pixKeyType,
+            status: 'PENDING',
+          },
+        });
+      });
+    } catch (err) {
+      // Propaga ConflictException; qualquer outro erro de DB é inesperado
+      throw err;
+    }
+
+    // Chamar Asaas FORA da transação — sem manter lock durante I/O externo
+    try {
+      const transfer = await this.asaasService.transferViaPixFromSubaccount(accountKey, {
+        value: data.value,
+        pixKey: data.pixKey,
+        pixKeyType: data.pixKeyType,
+      });
+
+      await this.prisma.withdrawalRecord.update({
+        where: { id: record.id },
+        data: {
+          status: 'PROCESSING',
+          asaas_transfer_id: transfer.id,
+          asaas_status: transfer.status,
+          processed_at: new Date(),
+        },
+      });
+
+      await this.prisma.auditLog.create({
+        data: {
+          user_id: userId,
+          action: 'WITHDRAWAL_REQUESTED',
+          entity: 'WithdrawalRecord',
+          entity_id: record.id,
+          // Nunca logar pixKey — somente tipo
+          details: { value: data.value, pix_key_type: data.pixKeyType, asaas_transfer_id: transfer.id },
+        },
+      });
+
+      this.logger.log(`Saque enviado ao Asaas. WithdrawalRecord: ${record.id}, Transfer: ${transfer.id}`);
+      return { id: record.id, status: 'PROCESSING', asaas_transfer_id: transfer.id };
+
+    } catch (err) {
+      await this.prisma.withdrawalRecord.update({
+        where: { id: record.id },
+        data: {
+          status: 'FAILED',
+          failure_reason: err instanceof HttpException ? err.message : 'Falha na comunicação com Asaas',
+          failed_at: new Date(),
+        },
+      });
+      this.logger.error(`Saque falhou. WithdrawalRecord: ${record.id}. Motivo: ${err.message}`);
+      if (err instanceof HttpException) throw err;
+      throw new BadGatewayException('Falha ao processar saque. Tente novamente.');
+    }
+  }
+
+  async getWithdrawals(userId: string, page = 1, limit = 10) {
+    const skip = (page - 1) * limit;
+    const [records, total] = await Promise.all([
+      this.prisma.withdrawalRecord.findMany({
+        where: { user_id: userId },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          value: true,
+          pix_key_masked: true,
+          pix_key_type: true,
+          status: true,
+          asaas_transfer_id: true,
+          failure_reason: true,
+          processed_at: true,
+          confirmed_at: true,
+          failed_at: true,
+          created_at: true,
+        },
+      }),
+      this.prisma.withdrawalRecord.count({ where: { user_id: userId } }),
+    ]);
+    return { records, total, page, limit, pages: Math.ceil(total / limit) };
+  }
+
+  private maskPixKey(pixKey: string, pixKeyType: string): string {
+    if (pixKeyType === 'EMAIL') {
+      const atIndex = pixKey.indexOf('@');
+      if (atIndex < 0) return '***';
+      const local = pixKey.slice(0, atIndex);
+      const domain = pixKey.slice(atIndex + 1);
+      return `${local.slice(0, Math.min(2, local.length))}***@${domain}`;
+    }
+    if (['CPF', 'CNPJ'].includes(pixKeyType)) {
+      return pixKey.slice(0, -4).replace(/\d/g, '*') + pixKey.slice(-4);
+    }
+    if (pixKeyType === 'PHONE') {
+      return pixKey.slice(0, -4).replace(/\d/g, '*') + pixKey.slice(-4);
+    }
+    // EVP (chave aleatória)
+    return `${pixKey.slice(0, 8)}...${pixKey.slice(-4)}`;
   }
 
   async getSplitStatus(userId: string): Promise<{ accepted: boolean }> {

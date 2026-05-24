@@ -13,6 +13,10 @@ describe('IntegrationsController', () => {
     getZapiConfig: jest.fn(),
     updateZapiConfig: jest.fn(),
     disconnectZapi: jest.fn(),
+    getFinanceBalance: jest.fn(),
+    requestWithdrawal: jest.fn(),
+    getWithdrawals: jest.fn(),
+    getSplitStatus: jest.fn(),
   };
 
   const req = { user: { id: 'user-1' } };
@@ -71,5 +75,39 @@ describe('IntegrationsController', () => {
     mockService.disconnectZapi.mockResolvedValueOnce({});
     await controller.disconnectZapi(req as any);
     expect(mockService.disconnectZapi).toHaveBeenCalledWith('user-1');
+  });
+
+  it('getFinanceBalance delega para service com userId', async () => {
+    mockService.getFinanceBalance.mockResolvedValueOnce({ balance: 200, hasSubaccount: true });
+    const result = await controller.getFinanceBalance(req as any);
+    expect(mockService.getFinanceBalance).toHaveBeenCalledWith('user-1');
+    expect(result.balance).toBe(200);
+  });
+
+  it('requestWithdrawal delega para service com userId e dto', async () => {
+    const dto: any = { value: 50, pixKey: 'cpf', pixKeyType: 'CPF', idempotencyKey: 'uuid-1' };
+    mockService.requestWithdrawal.mockResolvedValueOnce({ id: 'wr-1', status: 'PROCESSING' });
+    const result = await controller.requestWithdrawal(req as any, dto);
+    expect(mockService.requestWithdrawal).toHaveBeenCalledWith('user-1', dto);
+    expect(result.status).toBe('PROCESSING');
+  });
+
+  it('getWithdrawals delega para service com paginação padrão', async () => {
+    mockService.getWithdrawals.mockResolvedValueOnce({ records: [], total: 0, page: 1, limit: 10, pages: 0 });
+    await controller.getWithdrawals(req as any);
+    expect(mockService.getWithdrawals).toHaveBeenCalledWith('user-1', 1, 10);
+  });
+
+  it('getWithdrawals repassa page e limit quando fornecidos', async () => {
+    mockService.getWithdrawals.mockResolvedValueOnce({ records: [], total: 0, page: 2, limit: 5, pages: 0 });
+    await controller.getWithdrawals(req as any, '2', '5');
+    expect(mockService.getWithdrawals).toHaveBeenCalledWith('user-1', 2, 5);
+  });
+
+  it('getSplitStatus delega para service com userId', async () => {
+    mockService.getSplitStatus.mockResolvedValueOnce({ accepted: true });
+    const result = await controller.getSplitStatus(req as any);
+    expect(mockService.getSplitStatus).toHaveBeenCalledWith('user-1');
+    expect(result.accepted).toBe(true);
   });
 });

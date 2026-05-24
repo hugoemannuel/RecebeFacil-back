@@ -12,6 +12,16 @@ describe('IntegrationsService', () => {
     integrationConfig: { upsert: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
     auditLog: { create: jest.fn() },
     subscription: { findFirst: jest.fn() },
+    withdrawalRecord: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      count: jest.fn(),
+      findMany: jest.fn(),
+    },
+    $transaction: jest.fn(),
   };
 
   const mockAsaas = {
@@ -319,20 +329,63 @@ describe('IntegrationsService', () => {
 
   // ─── requestWithdrawal ────────────────────────────────────────
   describe('requestWithdrawal', () => {
-    const withdrawData = { value: 100, pixKey: 'user@email.com', pixKeyType: 'EMAIL' };
+    const withdrawData = {
+      value: 100,
+      pixKey: 'user@email.com',
+      pixKeyType: 'EMAIL',
+      idempotencyKey: 'idempotency-uuid-1',
+    };
 
-    it('deve descriptografar accountKey e chamar transferViaPixFromSubaccount', async () => {
+    const setupHappyPath = () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null); // sem idempotência
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
-      mockAsaas.transferViaPixFromSubaccount.mockResolvedValueOnce({ id: 'transfer-1', status: 'PENDING' });
+      mockAsaas.getAccountBalance.mockResolvedValueOnce({ balance: 500 });
+      mockPrisma.$transaction.mockImplementationOnce(async (fn: any) => fn(mockPrisma));
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce(null); // sem concurrent
+      mockPrisma.withdrawalRecord.create.mockResolvedValueOnce({ id: 'wr-1' });
+      mockAsaas.transferViaPixFromSubaccount.mockResolvedValueOnce({ id: 'tr-1', status: 'PENDING' });
+      mockPrisma.withdrawalRecord.update.mockResolvedValueOnce({});
       mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    };
 
+    it('deve executar o fluxo completo de saque com sucesso', async () => {
+      setupHappyPath();
       const result = await service.requestWithdrawal('user-1', withdrawData);
       expect(mockCrypto.decrypt).toHaveBeenCalledWith('enc:key_ok');
-      expect(mockAsaas.transferViaPixFromSubaccount).toHaveBeenCalledWith('key_ok', withdrawData);
-      expect(result).toEqual({ id: 'transfer-1', status: 'PENDING' });
+      expect(mockAsaas.getAccountBalance).toHaveBeenCalledWith('key_ok');
+      expect(mockAsaas.transferViaPixFromSubaccount).toHaveBeenCalledWith('key_ok', expect.objectContaining({ value: 100, pixKey: 'user@email.com' }));
+      expect(result).toEqual({ id: 'wr-1', status: 'PROCESSING', asaas_transfer_id: 'tr-1' });
+    });
+
+    it('deve retornar registro existente quando idempotency key já existe com status PENDING', async () => {
+      const existing = { id: 'wr-existing', status: 'PENDING', asaas_transfer_id: null };
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(existing);
+
+      const result = await service.requestWithdrawal('user-1', withdrawData);
+      expect(result.id).toBe('wr-existing');
+      expect(result.status).toBe('PENDING');
+      expect(mockAsaas.transferViaPixFromSubaccount).not.toHaveBeenCalled();
+    });
+
+    it('deve retornar registro existente quando idempotency key já existe com status CONFIRMED', async () => {
+      const existing = { id: 'wr-done', status: 'CONFIRMED', asaas_transfer_id: 'tr-done' };
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(existing);
+
+      const result = await service.requestWithdrawal('user-1', withdrawData);
+      expect(result.id).toBe('wr-done');
+      expect(result.asaas_transfer_id).toBe('tr-done');
+    });
+
+    it('deve lançar ConflictException quando idempotency key aponta para registro FAILED', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce({ id: 'wr-fail', status: 'FAILED' });
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
+        'Esta solicitação já foi processada',
+      );
     });
 
     it('deve lançar ForbiddenException quando subconta não configurada', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null);
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: null });
 
       await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
@@ -341,7 +394,8 @@ describe('IntegrationsService', () => {
       expect(mockCrypto.decrypt).not.toHaveBeenCalled();
     });
 
-    it('deve lançar ForbiddenException quando config não existe', async () => {
+    it('deve lançar ForbiddenException quando IntegrationConfig não existe', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null);
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce(null);
 
       await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
@@ -355,18 +409,86 @@ describe('IntegrationsService', () => {
       ).rejects.toThrow('Valor deve ser maior que zero.');
     });
 
-    it('deve criar AuditLog com pixKeyType mas sem pixKey', async () => {
-      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
-      mockAsaas.transferViaPixFromSubaccount.mockResolvedValueOnce({ id: 'transfer-2', status: 'PENDING' });
-      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    it('deve lançar BadRequestException quando valor é menor que 0,10', async () => {
+      await expect(
+        service.requestWithdrawal('user-1', { ...withdrawData, value: 0.05 }),
+      ).rejects.toThrow('Valor mínimo para saque é R$ 0,10.');
+    });
 
+    it('deve lançar BadRequestException quando saldo insuficiente', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
+      mockAsaas.getAccountBalance.mockResolvedValueOnce({ balance: 50 }); // menor que 100
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow('Saldo insuficiente');
+    });
+
+    it('deve lançar ConflictException quando já existe saque PENDING/PROCESSING para o mesmo usuário', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
+      mockAsaas.getAccountBalance.mockResolvedValueOnce({ balance: 500 });
+      mockPrisma.$transaction.mockImplementationOnce(async (fn: any) => fn(mockPrisma));
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce({ id: 'wr-concurrent', status: 'PROCESSING' });
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
+        'Já existe um saque em andamento',
+      );
+    });
+
+    it('deve marcar registro como FAILED quando chamada ao Asaas falha', async () => {
+      mockPrisma.withdrawalRecord.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
+      mockAsaas.getAccountBalance.mockResolvedValueOnce({ balance: 500 });
+      mockPrisma.$transaction.mockImplementationOnce(async (fn: any) => fn(mockPrisma));
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce(null);
+      mockPrisma.withdrawalRecord.create.mockResolvedValueOnce({ id: 'wr-fail' });
+      mockAsaas.transferViaPixFromSubaccount.mockRejectedValueOnce(new Error('Asaas timeout'));
+      mockPrisma.withdrawalRecord.update.mockResolvedValueOnce({});
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow();
+      expect(mockPrisma.withdrawalRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'wr-fail' },
+          data: expect.objectContaining({ status: 'FAILED', failed_at: expect.any(Date) }),
+        }),
+      );
+    });
+
+    it('deve criar AuditLog com pix_key_type mas sem pixKey', async () => {
+      setupHappyPath();
       await service.requestWithdrawal('user-1', withdrawData);
 
       const auditCall = mockPrisma.auditLog.create.mock.calls[0][0];
       expect(auditCall.data.action).toBe('WITHDRAWAL_REQUESTED');
-      expect(auditCall.data.details.pixKeyType).toBe('EMAIL');
-      // pixKey nunca deve aparecer no AuditLog
+      expect(auditCall.data.details.pix_key_type).toBe('EMAIL');
       expect(JSON.stringify(auditCall.data.details)).not.toContain('user@email.com');
+    });
+  });
+
+  // ─── getWithdrawals ───────────────────────────────────────────
+  describe('getWithdrawals', () => {
+    it('deve retornar lista paginada de saques do usuário', async () => {
+      mockPrisma.withdrawalRecord.findMany.mockResolvedValueOnce([{ id: 'wr-1', value: 100 }]);
+      mockPrisma.withdrawalRecord.count.mockResolvedValueOnce(1);
+
+      const result = await service.getWithdrawals('user-1', 1, 10);
+      expect(result.records).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.pages).toBe(1);
+      expect(mockPrisma.withdrawalRecord.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { user_id: 'user-1' }, skip: 0, take: 10 }),
+      );
+    });
+
+    it('deve calcular skip corretamente para página 2', async () => {
+      mockPrisma.withdrawalRecord.findMany.mockResolvedValueOnce([]);
+      mockPrisma.withdrawalRecord.count.mockResolvedValueOnce(15);
+
+      const result = await service.getWithdrawals('user-1', 2, 5);
+      expect(result.pages).toBe(3);
+      expect(mockPrisma.withdrawalRecord.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 5, take: 5 }),
+      );
     });
   });
 });

@@ -24,6 +24,11 @@ describe('AsaasWebhookController', () => {
 
   const mockPrisma = {
     charge: { updateMany: jest.fn() },
+    withdrawalRecord: {
+      updateMany: jest.fn(),
+      findFirst: jest.fn(),
+    },
+    auditLog: { create: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -169,6 +174,87 @@ describe('AsaasWebhookController', () => {
 
       await controller.handleWebhook(body, 'secret-token');
       expect(mockPrisma.charge.updateMany).toHaveBeenCalled();
+    });
+
+    // ─── TRANSFER_DONE ──────────────────────────────────────────
+    it('deve processar TRANSFER_DONE e confirmar WithdrawalRecord', async () => {
+      const body = { event: 'TRANSFER_DONE', transfer: { id: 'tr-1', status: 'DONE' } };
+      const record = { id: 'wr-1', user_id: 'user-1' };
+      mockPrisma.withdrawalRecord.updateMany.mockResolvedValueOnce({ count: 1 });
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce(record);
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await controller.handleWebhook(body, 'secret-token');
+      expect(result).toEqual({ received: true });
+      expect(mockPrisma.withdrawalRecord.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ asaas_transfer_id: 'tr-1', status: { not: 'CONFIRMED' } }),
+          data: expect.objectContaining({ status: 'CONFIRMED', confirmed_at: expect.any(Date) }),
+        }),
+      );
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ action: 'WITHDRAWAL_CONFIRMED', user_id: 'user-1' }),
+        }),
+      );
+    });
+
+    it('não deve criar AuditLog em TRANSFER_DONE quando nenhum registro foi atualizado (idempotência)', async () => {
+      const body = { event: 'TRANSFER_DONE', transfer: { id: 'tr-already-confirmed', status: 'DONE' } };
+      mockPrisma.withdrawalRecord.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('não deve processar TRANSFER_DONE quando transfer.id ausente', async () => {
+      const body = { event: 'TRANSFER_DONE', transfer: null };
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockPrisma.withdrawalRecord.updateMany).not.toHaveBeenCalled();
+    });
+
+    // ─── TRANSFER_FAILED ────────────────────────────────────────
+    it('deve processar TRANSFER_FAILED e marcar WithdrawalRecord como FAILED', async () => {
+      const body = { event: 'TRANSFER_FAILED', transfer: { id: 'tr-2', status: 'FAILED', failReason: 'INVALID_PIX_KEY' } };
+      const record = { id: 'wr-2', user_id: 'user-2' };
+      mockPrisma.withdrawalRecord.updateMany.mockResolvedValueOnce({ count: 1 });
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce(record);
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await controller.handleWebhook(body, 'secret-token');
+      expect(result).toEqual({ received: true });
+      expect(mockPrisma.withdrawalRecord.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ asaas_transfer_id: 'tr-2', status: { not: 'FAILED' } }),
+          data: expect.objectContaining({ status: 'FAILED', failure_reason: 'INVALID_PIX_KEY', failed_at: expect.any(Date) }),
+        }),
+      );
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ action: 'WITHDRAWAL_FAILED', user_id: 'user-2', details: expect.objectContaining({ reason: 'INVALID_PIX_KEY' }) }),
+        }),
+      );
+    });
+
+    it('deve usar motivo padrão em TRANSFER_FAILED quando failReason ausente', async () => {
+      const body = { event: 'TRANSFER_FAILED', transfer: { id: 'tr-3', status: 'FAILED' } };
+      const record = { id: 'wr-3', user_id: 'user-3' };
+      mockPrisma.withdrawalRecord.updateMany.mockResolvedValueOnce({ count: 1 });
+      mockPrisma.withdrawalRecord.findFirst.mockResolvedValueOnce(record);
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockPrisma.withdrawalRecord.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ failure_reason: 'Transferência recusada pelo Asaas' }),
+        }),
+      );
+    });
+
+    it('não deve processar TRANSFER_FAILED quando transfer.id ausente', async () => {
+      const body = { event: 'TRANSFER_FAILED', transfer: null };
+      await controller.handleWebhook(body, 'secret-token');
+      expect(mockPrisma.withdrawalRecord.updateMany).not.toHaveBeenCalled();
     });
   });
 });

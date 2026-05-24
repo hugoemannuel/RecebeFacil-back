@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AsaasService } from './asaas.service';
+import { CryptoService } from '../common/crypto.service';
 
 @Injectable()
 export class IntegrationsService {
@@ -9,6 +10,7 @@ export class IntegrationsService {
   constructor(
     private prisma: PrismaService,
     private asaasService: AsaasService,
+    private crypto: CryptoService,
   ) {}
 
   /**
@@ -216,7 +218,8 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
       return { balance: 0, hasSubaccount };
     }
 
-    const { balance } = await this.asaasService.getAccountBalance(config.asaas_account_key);
+    const accountKey = this.crypto.decrypt(config.asaas_account_key);
+    const { balance } = await this.asaasService.getAccountBalance(accountKey);
     return { balance, hasSubaccount };
   }
 
@@ -236,7 +239,8 @@ O RecebeFácil pode atualizar estes termos com aviso prévio de 15 dias via e-ma
       throw new ForbiddenException('Subconta Asaas não configurada. Aceite os termos de intermediação para habilitar saques.');
     }
 
-    const result = await this.asaasService.transferViaPixFromSubaccount(config.asaas_account_key, data);
+    const accountKey = this.crypto.decrypt(config.asaas_account_key);
+    const result = await this.asaasService.transferViaPixFromSubaccount(accountKey, data);
 
     await this.prisma.auditLog.create({
       data: {

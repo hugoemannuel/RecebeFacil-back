@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { IntegrationsService } from './integrations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AsaasService } from './asaas.service';
+import { CryptoService } from '../common/crypto.service';
 
 describe('IntegrationsService', () => {
   let service: IntegrationsService;
@@ -15,6 +16,13 @@ describe('IntegrationsService', () => {
 
   const mockAsaas = {
     createSubaccount: jest.fn(),
+    getAccountBalance: jest.fn(),
+    transferViaPixFromSubaccount: jest.fn(),
+  };
+
+  const mockCrypto = {
+    encrypt: jest.fn((v: string) => `enc:${v}`),
+    decrypt: jest.fn((v: string) => v.replace('enc:', '')),
   };
 
   beforeEach(async () => {
@@ -23,6 +31,7 @@ describe('IntegrationsService', () => {
         IntegrationsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: AsaasService, useValue: mockAsaas },
+        { provide: CryptoService, useValue: mockCrypto },
       ],
     }).compile();
     service = module.get<IntegrationsService>(IntegrationsService);
@@ -208,16 +217,18 @@ describe('IntegrationsService', () => {
 
   // ─── getFinanceBalance ────────────────────────────────────────
   describe('getFinanceBalance', () => {
-    it('deve retornar hasSubaccount true e balance real quando termos aceitos e accountKey presente', async () => {
+    it('deve descriptografar accountKey e retornar balance real', async () => {
       mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({
         split_terms_accepted_at: new Date(),
-        asaas_account_key: 'key_ok',
+        asaas_account_key: 'enc:key_ok',
       });
-      mockAsaas.getAccountBalance = jest.fn().mockResolvedValueOnce({ balance: 150 });
+      mockAsaas.getAccountBalance.mockResolvedValueOnce({ balance: 150 });
 
       const result = await service.getFinanceBalance('user-1');
       expect(result.hasSubaccount).toBe(true);
       expect(result.balance).toBe(150);
+      expect(mockCrypto.decrypt).toHaveBeenCalledWith('enc:key_ok');
+      expect(mockAsaas.getAccountBalance).toHaveBeenCalledWith('key_ok');
     });
 
     it('deve retornar hasSubaccount true e balance 0 quando termos aceitos mas accountKey ausente', async () => {
@@ -229,6 +240,7 @@ describe('IntegrationsService', () => {
       const result = await service.getFinanceBalance('user-1');
       expect(result.hasSubaccount).toBe(true);
       expect(result.balance).toBe(0);
+      expect(mockCrypto.decrypt).not.toHaveBeenCalled();
     });
 
     it('deve retornar hasSubaccount false quando termos não aceitos', async () => {
@@ -302,6 +314,59 @@ describe('IntegrationsService', () => {
       await service.updateAutomationConfig('user-1', { allows_automation: true });
       const call = mockPrisma.integrationConfig.upsert.mock.calls[0][0];
       expect(call.update.send_hour).toBeUndefined();
+    });
+  });
+
+  // ─── requestWithdrawal ────────────────────────────────────────
+  describe('requestWithdrawal', () => {
+    const withdrawData = { value: 100, pixKey: 'user@email.com', pixKeyType: 'EMAIL' };
+
+    it('deve descriptografar accountKey e chamar transferViaPixFromSubaccount', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
+      mockAsaas.transferViaPixFromSubaccount.mockResolvedValueOnce({ id: 'transfer-1', status: 'PENDING' });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await service.requestWithdrawal('user-1', withdrawData);
+      expect(mockCrypto.decrypt).toHaveBeenCalledWith('enc:key_ok');
+      expect(mockAsaas.transferViaPixFromSubaccount).toHaveBeenCalledWith('key_ok', withdrawData);
+      expect(result).toEqual({ id: 'transfer-1', status: 'PENDING' });
+    });
+
+    it('deve lançar ForbiddenException quando subconta não configurada', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: null });
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
+        'Subconta Asaas não configurada',
+      );
+      expect(mockCrypto.decrypt).not.toHaveBeenCalled();
+    });
+
+    it('deve lançar ForbiddenException quando config não existe', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.requestWithdrawal('user-1', withdrawData)).rejects.toThrow(
+        'Subconta Asaas não configurada',
+      );
+    });
+
+    it('deve lançar BadRequestException quando valor é zero', async () => {
+      await expect(
+        service.requestWithdrawal('user-1', { ...withdrawData, value: 0 }),
+      ).rejects.toThrow('Valor deve ser maior que zero.');
+    });
+
+    it('deve criar AuditLog com pixKeyType mas sem pixKey', async () => {
+      mockPrisma.integrationConfig.findUnique.mockResolvedValueOnce({ asaas_account_key: 'enc:key_ok' });
+      mockAsaas.transferViaPixFromSubaccount.mockResolvedValueOnce({ id: 'transfer-2', status: 'PENDING' });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await service.requestWithdrawal('user-1', withdrawData);
+
+      const auditCall = mockPrisma.auditLog.create.mock.calls[0][0];
+      expect(auditCall.data.action).toBe('WITHDRAWAL_REQUESTED');
+      expect(auditCall.data.details.pixKeyType).toBe('EMAIL');
+      // pixKey nunca deve aparecer no AuditLog
+      expect(JSON.stringify(auditCall.data.details)).not.toContain('user@email.com');
     });
   });
 });

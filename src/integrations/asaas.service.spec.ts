@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { AsaasService } from './asaas.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CryptoService } from '../common/crypto.service';
 import { PlanType } from '@prisma/client';
 import { of, throwError } from 'rxjs';
 
@@ -22,6 +23,10 @@ describe('AsaasService', () => {
     user: { findUnique: jest.fn() },
     integrationConfig: { upsert: jest.fn() },
   };
+  const mockCrypto = {
+    encrypt: jest.fn((v: string) => `enc:${v}`),
+    decrypt: jest.fn((v: string) => v.replace('enc:', '')),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -30,6 +35,7 @@ describe('AsaasService', () => {
         { provide: HttpService, useValue: mockHttpService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: CryptoService, useValue: mockCrypto },
       ],
     }).compile();
     service = module.get<AsaasService>(AsaasService);
@@ -147,7 +153,7 @@ describe('AsaasService', () => {
 
   // ─── createSubaccount ─────────────────────────────────────────
   describe('createSubaccount', () => {
-    it('deve criar subconta e salvar walletId + accountKey', async () => {
+    it('deve criar subconta e salvar walletId + accountKey criptografado', async () => {
       mockPrisma.user.findUnique.mockResolvedValueOnce({
         id: 'user-1', name: 'João', email: 'j@j.com', phone: '5511999',
         creditor_profile: { document: '12345678901' },
@@ -157,10 +163,12 @@ describe('AsaasService', () => {
 
       const result = await service.createSubaccount('user-1');
       expect(result.walletId).toBe('wlt_123');
+      // retorna accountKey em plain text para uso imediato; o banco recebe criptografado
       expect(result.accountKey).toBe('acc_key_abc');
+      expect(mockCrypto.encrypt).toHaveBeenCalledWith('acc_key_abc');
       expect(mockPrisma.integrationConfig.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          update: expect.objectContaining({ asaas_wallet_id: 'wlt_123', asaas_account_key: 'acc_key_abc' }),
+          update: expect.objectContaining({ asaas_wallet_id: 'wlt_123', asaas_account_key: 'enc:acc_key_abc' }),
         }),
       );
     });

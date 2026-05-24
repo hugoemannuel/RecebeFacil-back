@@ -2,6 +2,7 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { CryptoService } from '../common/crypto.service';
 import { firstValueFrom } from 'rxjs';
 import { PlanType } from '@prisma/client';
 
@@ -15,6 +16,7 @@ export class AsaasService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly crypto: CryptoService,
   ) {
     this.baseUrl = this.configService.get<string>('ASAAS_API_URL') || 'https://sandbox.asaas.com/api/v3';
     this.apiKey = this.configService.get<string>('ASAAS_API_KEY') || '';
@@ -208,11 +210,12 @@ export class AsaasService {
 
       const walletId: string = resp.data.walletId;
       const accountKey: string = resp.data.apiKey;
+      const accountKeyEncrypted = this.crypto.encrypt(accountKey);
 
       await this.prisma.integrationConfig.upsert({
         where: { user_id: userId },
-        update: { asaas_wallet_id: walletId, asaas_account_key: accountKey },
-        create: { user_id: userId, asaas_wallet_id: walletId, asaas_account_key: accountKey },
+        update: { asaas_wallet_id: walletId, asaas_account_key: accountKeyEncrypted },
+        create: { user_id: userId, asaas_wallet_id: walletId, asaas_account_key: accountKeyEncrypted },
       });
 
       this.logger.log(`Subconta Asaas criada para usuário ${userId}. WalletId: ${walletId}`);

@@ -4,19 +4,20 @@ import { ConfigModule } from '@nestjs/config';
 import { IntegrationsService } from './integrations.service';
 import { IntegrationsController } from './integrations.controller';
 import { AsaasService } from './asaas.service';
+import { CryptoService } from '../common/crypto.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AsaasWebhookController } from './asaas-webhook.controller';
 import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
   imports: [
-    PrismaModule, 
-    HttpModule, 
+    PrismaModule,
+    HttpModule,
     ConfigModule,
     forwardRef(() => SubscriptionModule),
   ],
   controllers: [IntegrationsController, AsaasWebhookController],
-  providers: [IntegrationsService, AsaasService],
+  providers: [IntegrationsService, AsaasService, CryptoService],
   exports: [IntegrationsService, AsaasService],
 })
 export class IntegrationsModule { }

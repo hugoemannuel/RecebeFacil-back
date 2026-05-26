@@ -1,8 +1,10 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
 
-export const NOTIFICATION_QUEUE = 'whatsapp-notification';
-export const NOTIFICATION_DLQ   = 'whatsapp-notification-dlq';
+export const NOTIFICATION_QUEUE  = 'whatsapp-notification';
+export const NOTIFICATION_DLQ    = 'whatsapp-notification-dlq';
+export const WEBHOOK_ASAAS_QUEUE = 'asaas-webhook';
+export const WEBHOOK_ASAAS_DLQ   = 'asaas-webhook-dlq';
 
 @Injectable()
 export class PgBossService implements OnApplicationBootstrap, OnApplicationShutdown {

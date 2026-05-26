@@ -267,6 +267,8 @@ model Charge {
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@index([asaas_payment_id])
 }
 
 model MessageHistory {
@@ -389,6 +391,28 @@ model WithdrawalRecord {
 
   @@index([user_id, created_at])
   @@index([asaas_transfer_id])
+}
+
+// ==========================================
+// EVENTOS DE WEBHOOK (idempotência + auditoria)
+// asaas_event_id: fingerprint SHA-256 do evento — impede processamento duplicado.
+// ==========================================
+
+model WebhookEvent {
+  id             String    @id @default(uuid())
+  source         String    // 'ASAAS' | 'ZAPI'
+  event_type     String    // Ex: 'PAYMENT_CONFIRMED'
+  asaas_event_id String?   @unique // SHA-256(event:entityId) — deduplicação
+  payload        Json
+  processed      Boolean   @default(false)
+  processed_at   DateTime?
+  error          String?
+  retry_count    Int       @default(0)
+
+  created_at DateTime @default(now())
+
+  @@index([source, event_type])
+  @@index([processed, created_at])
 }
 
 // ==========================================

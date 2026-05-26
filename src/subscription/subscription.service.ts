@@ -401,6 +401,34 @@ export class SubscriptionService {
   }
 
   /**
+   * Diário às 8h: detecta saques em PROCESSING há mais de 24h (possível stuck).
+   * Saques stuck surgem quando o webhook TRANSFER_DONE/FAILED não chegou após o PIX ser enviado.
+   */
+  @Cron('0 8 * * *')
+  async checkStuckWithdrawals(): Promise<void> {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const stuck = await this.prisma.withdrawalRecord.findMany({
+      where: { status: 'PROCESSING', processed_at: { lt: cutoff } },
+      select: { id: true, user_id: true, value: true, processed_at: true },
+    });
+
+    if (stuck.length === 0) return;
+
+    this.logger.error(
+      `⚠️ ${stuck.length} saque(s) em PROCESSING há mais de 24h: ${stuck.map((w) => w.id).join(', ')}`,
+    );
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'WITHDRAWAL_STUCK_ALERT',
+        entity: 'WithdrawalRecord',
+        entity_id: 'BATCH',
+        details: { count: stuck.length, ids: stuck.map((w) => w.id) },
+      },
+    });
+  }
+
+  /**
    * Rebaixa para FREE via webhook PAYMENT_DELETED ou PAYMENT_REFUNDED.
    */
   async downgradeByAsaasId(asaasId: string, reason: string) {

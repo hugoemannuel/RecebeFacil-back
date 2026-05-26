@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { AuthGuard } from '@nestjs/passport';
 import { ClientsController } from './clients.controller';
 import { ClientsService } from './clients.service';
+import { PlanGuard } from '../common/plan.guard';
 
 describe('ClientsController', () => {
   let controller: ClientsController;
@@ -19,7 +21,12 @@ describe('ClientsController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ClientsController],
       providers: [{ provide: ClientsService, useValue: mockService }],
-    }).compile();
+    })
+      .overrideGuard(AuthGuard('jwt'))
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PlanGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
     controller = module.get<ClientsController>(ClientsController);
   });
 

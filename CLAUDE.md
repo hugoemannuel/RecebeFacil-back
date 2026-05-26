@@ -53,7 +53,7 @@ src/
 - `/backend-security` — IDOR, user enumeration, what to never log
 - `/backend-plan-guard` — PlanGuard, PLAN_MODULES, charge limits
 - `/backend-integrations` — Z-API (WhatsApp) and Asaas (payment gateway)
-- `/backend-testing` — **OBRIGATÓRIO** ao criar/modificar qualquer service, controller, guard ou strategy — padrões Jest, mocks Prisma, cobertura mínima 80%, cenários obrigatórios
+- `/backend-testing` — **OBRIGATÓRIO** ao criar/modificar qualquer service, guard ou worker — estratégia oficial de testes, mocks, cobertura por módulo crítico
 
 ## Key Patterns
 
@@ -98,6 +98,36 @@ New enums: `SubModule { HOME CHARGES CLIENTS REPORTS EXCEL_IMPORT }` · `Frequen
 | STARTER | 50 | ONCE, WEEKLY | ✗ | 3 |
 | PRO | 200 | All | ✓ | unlimited |
 | UNLIMITED | 999,999 | All | ✓ | unlimited |
+
+## Testing Strategy
+
+**Ver `TESTING_STRATEGY.md` na raiz do projeto para o plano completo.**
+
+### O que testar (obrigatório)
+- Services com lógica de negócio real (charges, subscription, auth, automation, workers)
+- Guards (`PlanGuard`, `AuthGuard`)
+- Workers de fila (`NotificationWorker`, `AsaasWebhookWorker`)
+
+### O que NÃO criar spec
+- Controllers que só delegam (`return this.service.method(userId, dto)`)
+- `PrismaService` — infraestrutura de framework
+- `AppController` — boilerplate do NestJS CLI
+
+### Cobertura mínima por módulo crítico
+| Módulo | Mínimo |
+|---|---|
+| `charges/charges.service.ts` | 90% |
+| `subscription/subscription.service.ts` | 90% |
+| `integrations/asaas-webhook.worker.ts` | 90% |
+| `common/plan.guard.ts` | 85% |
+| `auth/auth.service.ts` | 85% |
+| `*.controller.ts` | Não exigido |
+
+### Regras inegociáveis de mock
+- Sempre `mockResolvedValueOnce` — nunca `mockResolvedValue` (contamina testes)
+- Sempre `afterEach(() => jest.clearAllMocks())`
+- IDOR deve lançar `ForbiddenException`, nunca `NotFoundException`
+- bcrypt deve ser mockado (`jest.mock('bcrypt')`) — nunca rodar hash real
 
 ## Security Rules
 

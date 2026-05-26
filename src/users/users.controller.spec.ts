@@ -5,7 +5,6 @@ import { SubscriptionService } from '../subscription/subscription.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
-  let service: UsersService;
 
   const mockUsersService = {
     getProfile: jest.fn(),
@@ -19,7 +18,6 @@ describe('UsersController', () => {
     cancelSubscription: jest.fn(),
   };
 
-  const mockUser = { id: 'user-1', name: 'Test User', email: 'test@example.com', phone: '5511999999999' };
   const mockReq = { user: { id: 'user-1' }, ip: '127.0.0.1' };
 
   beforeEach(async () => {
@@ -30,73 +28,45 @@ describe('UsersController', () => {
         { provide: SubscriptionService, useValue: mockSubscriptionService },
       ],
     }).compile();
-
     controller = module.get<UsersController>(UsersController);
-    service = module.get<UsersService>(UsersService);
   });
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should be defined', () => {
-    expect(controller).toBeDefined();
-  });
+  it('deve estar definido', () => expect(controller).toBeDefined());
 
-  describe('GET /users/me', () => {
-    it('should return profile from service', async () => {
-      mockUsersService.getProfile.mockResolvedValue(mockUser);
-      const result = await controller.getProfile(mockReq);
-      expect(service.getProfile).toHaveBeenCalledWith('user-1');
-      expect(result).toEqual(mockUser);
-    });
-  });
-
-  describe('PATCH /users/me', () => {
-    it('should delegate to updateProfile with userId and dto', async () => {
-      const dto = { name: 'New Name', email: 'new@example.com' };
-      mockUsersService.updateProfile.mockResolvedValue({ ...mockUser, ...dto });
-      const result = await controller.updateProfile(mockReq, dto);
-      expect(service.updateProfile).toHaveBeenCalledWith('user-1', dto);
-      expect(result.name).toBe('New Name');
-    });
-  });
-
-  describe('PATCH /users/me/password', () => {
-    it('should delegate to updatePassword with userId and dto', async () => {
-      const dto = { current_password: 'old123', new_password: 'new12345' };
-      mockUsersService.updatePassword.mockResolvedValue({ message: 'Senha alterada com sucesso.' });
-      const result = await controller.updatePassword(mockReq, dto);
-      expect(service.updatePassword).toHaveBeenCalledWith('user-1', dto);
-      expect(result.message).toBe('Senha alterada com sucesso.');
-    });
-  });
-
-  describe('DELETE /users/me', () => {
-    it('deve cancelar assinatura no Asaas e depois anonimizar a conta', async () => {
+  // ─── DELETE /users/me ─────────────────────────────────────────
+  // Lógica real no controller: chama cancelSubscription + deleteAccount em sequência,
+  // e continua com deleteAccount mesmo se cancelSubscription falhar.
+  describe('deleteAccount', () => {
+    it('deve cancelar assinatura e depois anonimizar a conta', async () => {
       mockSubscriptionService.cancelSubscription.mockResolvedValue(undefined);
       mockUsersService.deleteAccount.mockResolvedValue(undefined);
 
-      await controller.deleteAccount(mockReq);
+      await controller.deleteAccount(mockReq as any);
 
       expect(mockSubscriptionService.cancelSubscription).toHaveBeenCalledWith('user-1');
       expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
     });
 
-    it('deve anonimizar mesmo quando o cancelamento da assinatura falha', async () => {
+    it('deve anonimizar mesmo quando cancelamento da assinatura falha', async () => {
       mockSubscriptionService.cancelSubscription.mockRejectedValue(new Error('sem assinatura'));
       mockUsersService.deleteAccount.mockResolvedValue(undefined);
 
-      await controller.deleteAccount(mockReq);
+      await controller.deleteAccount(mockReq as any);
 
       expect(mockUsersService.deleteAccount).toHaveBeenCalledWith('user-1', '127.0.0.1');
     });
   });
 
-  describe('POST /users/me/avatar', () => {
-    it('deve fazer upload de avatar e retornar URL', async () => {
+  // ─── POST /users/me/avatar ────────────────────────────────────
+  // Lógica real no controller: constrói URL a partir do filename do arquivo.
+  describe('uploadAvatar', () => {
+    it('deve construir URL e delegar para service', async () => {
       const mockFile = { filename: 'avatar-123.jpg' } as Express.Multer.File;
       mockUsersService.updateAvatar.mockResolvedValueOnce({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });
 
-      const result = await controller.uploadAvatar(mockReq, mockFile);
+      const result = await controller.uploadAvatar(mockReq as any, mockFile);
 
       expect(mockUsersService.updateAvatar).toHaveBeenCalledWith('user-1', '/uploads/avatars/avatar-123.jpg');
       expect(result).toEqual({ avatarUrl: '/uploads/avatars/avatar-123.jpg' });

@@ -1,3 +1,5 @@
+jest.mock('bcrypt');
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -137,8 +139,9 @@ describe('UsersService', () => {
 
   describe('updatePassword', () => {
     it('should update password and create auditLog', async () => {
-      const hash = await bcrypt.hash('old-password', 10);
-      mockPrismaService.user.findUnique.mockResolvedValueOnce({ id: '1', password_hash: hash });
+      mockPrismaService.user.findUnique.mockResolvedValueOnce({ id: '1', password_hash: '$2b$12$oldhash' });
+      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
+      (bcrypt.hash as jest.Mock).mockResolvedValueOnce('$2b$12$newhash');
       mockPrismaService.user.update.mockResolvedValueOnce({});
       mockPrismaService.auditLog.create.mockResolvedValueOnce({});
 
@@ -152,8 +155,8 @@ describe('UsersService', () => {
     });
 
     it('should throw UnauthorizedException if current password is wrong', async () => {
-      const hash = await bcrypt.hash('correct-password', 10);
-      mockPrismaService.user.findUnique.mockResolvedValueOnce({ id: '1', password_hash: hash });
+      mockPrismaService.user.findUnique.mockResolvedValueOnce({ id: '1', password_hash: '$2b$12$oldhash' });
+      (bcrypt.compare as jest.Mock).mockResolvedValueOnce(false);
       await expect(service.updatePassword('1', { current_password: 'wrong', new_password: 'new12345' })).rejects.toThrow(UnauthorizedException);
     });
 

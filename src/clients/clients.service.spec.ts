@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -88,9 +88,9 @@ describe('ClientsService', () => {
       await expect(service.findOne('user-1', 'x')).rejects.toThrow(NotFoundException);
     });
 
-    it('deve lançar NotFoundException para IDOR', async () => {
+    it('deve lançar ForbiddenException para IDOR', async () => {
       mockPrisma.client.findUnique.mockResolvedValueOnce({ id: 'cl1', creditor_id: 'outro' });
-      await expect(service.findOne('user-1', 'cl1')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('user-1', 'cl1')).rejects.toThrow(ForbiddenException);
     });
   });
 

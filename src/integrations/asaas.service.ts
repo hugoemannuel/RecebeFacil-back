@@ -370,6 +370,59 @@ export class AsaasService {
     }
   }
 
+  /**
+   * Busca a URL de pagamento para retry de assinatura OVERDUE/PENDING.
+   * Prioriza OVERDUE, depois PENDING, fallback para o mais recente.
+   */
+  async getPaymentUrlForRetry(asaasId: string): Promise<{ invoiceUrl: string | null; paymentId: string | null }> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/subscriptions/${asaasId}/payments`, { headers: this.headers }),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      const payment =
+        payments.find((p) => p.status === 'OVERDUE') ??
+        payments.find((p) => p.status === 'PENDING') ??
+        payments[0];
+      const url = payment?.invoiceUrl ?? payment?.bankSlipUrl ?? payment?.checkoutUrl ?? null;
+      return { invoiceUrl: url, paymentId: payment?.id ?? null };
+    } catch (error) {
+      this.logger.warn(`Erro ao buscar pagamento para retry (${asaasId}): ${error.message}`);
+      return { invoiceUrl: null, paymentId: null };
+    }
+  }
+
+  /**
+   * Lista as faturas de uma assinatura no Asaas.
+   * Nunca persiste localmente — dados são lidos direto do Asaas.
+   */
+  async getSubscriptionInvoices(asaasId: string): Promise<Array<{
+    id: string;
+    value: number;
+    status: string;
+    dueDate: string;
+    paymentDate: string | null;
+    invoiceUrl: string | null;
+  }>> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.baseUrl}/subscriptions/${asaasId}/payments`, { headers: this.headers }),
+      );
+      const payments: any[] = response.data?.data ?? [];
+      return payments.map((p) => ({
+        id: p.id,
+        value: p.value,
+        status: p.status,
+        dueDate: p.dueDate,
+        paymentDate: p.paymentDate ?? null,
+        invoiceUrl: p.invoiceUrl ?? p.bankSlipUrl ?? p.checkoutUrl ?? null,
+      }));
+    } catch (error) {
+      this.logger.warn(`Erro ao buscar faturas da assinatura ${asaasId}: ${error.message}`);
+      return [];
+    }
+  }
+
   async cancelSubscription(asaasId: string): Promise<void> {
     try {
       await firstValueFrom(

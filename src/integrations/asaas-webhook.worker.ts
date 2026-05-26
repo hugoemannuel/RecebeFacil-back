@@ -102,6 +102,10 @@ export class AsaasWebhookWorker implements OnApplicationBootstrap {
         await this.handleTransferFailed(payload.transfer);
         break;
 
+      case 'PAYMENT_RESTORED':
+        await this.handlePaymentRestored(payload.payment);
+        break;
+
       default:
         this.logger.debug(`Evento Asaas não mapeado: ${eventType}`);
     }
@@ -199,6 +203,13 @@ export class AsaasWebhookWorker implements OnApplicationBootstrap {
     } catch (err) {
       this.logger.error('Erro ao verificar DLQ:', err);
     }
+  }
+
+  private async handlePaymentRestored(payment: any): Promise<void> {
+    const asaasId = payment?.subscription;
+    if (!asaasId) return;
+    this.logger.log(`Pagamento restaurado para assinatura: ${asaasId}, Payment: ${payment?.id}`);
+    await this.subscriptionService.activateSubscriptionByAsaasId(asaasId, payment.id);
   }
 
   private async handleTransferFailed(transfer: any): Promise<void> {

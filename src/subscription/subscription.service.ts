@@ -429,6 +429,164 @@ export class SubscriptionService {
   }
 
   /**
+   * Retry real de pagamento: busca URL da fatura OVERDUE/PENDING no Asaas.
+   */
+  async retryPayment(userId: string): Promise<{ invoiceUrl: string | null; asaasId: string }> {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+
+    if (!subscription || subscription.status !== 'OVERDUE') {
+      throw new BadRequestException('Nenhuma assinatura com pagamento pendente encontrada.');
+    }
+
+    if (!subscription.asaas_id) {
+      throw new BadRequestException('Assinatura sem vínculo com o gateway de pagamento.');
+    }
+
+    const { invoiceUrl, paymentId } = await this.asaasService.getPaymentUrlForRetry(subscription.asaas_id);
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'PAYMENT_RETRY_REQUESTED',
+        entity: 'Subscription',
+        entity_id: subscription.id,
+        details: { asaasId: subscription.asaas_id, paymentId },
+      },
+    });
+
+    return { invoiceUrl, asaasId: subscription.asaas_id };
+  }
+
+  /**
+   * Reativa assinatura CANCELED recriando no Asaas com o mesmo plano/período.
+   */
+  async reactivateSubscription(userId: string, document?: string) {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+
+    if (!subscription || subscription.status !== 'CANCELED') {
+      throw new BadRequestException('Nenhuma assinatura cancelada encontrada para reativar.');
+    }
+
+    const checkout = await this.createCheckout(
+      userId,
+      subscription.plan_type,
+      subscription.period as 'MONTHLY' | 'YEARLY',
+      document,
+    );
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'SUBSCRIPTION_REACTIVATION_INITIATED',
+        entity: 'Subscription',
+        entity_id: subscription.id,
+        details: { plan_type: subscription.plan_type, period: subscription.period },
+      },
+    });
+
+    return checkout;
+  }
+
+  /**
+   * Troca de plano: cancela o atual no Asaas e cria novo.
+   * Retorna o link de checkout do novo plano (status fica PENDING até pagamento).
+   */
+  async changePlan(userId: string, planType: PlanType, period: 'MONTHLY' | 'YEARLY', document?: string) {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+
+    if (!subscription || !['ACTIVE', 'OVERDUE'].includes(subscription.status)) {
+      throw new BadRequestException('Nenhuma assinatura ativa para mudar de plano.');
+    }
+
+    if (subscription.plan_type === planType && subscription.period === period) {
+      throw new BadRequestException('O plano selecionado é idêntico ao atual.');
+    }
+
+    if (subscription.asaas_id) {
+      await this.asaasService.cancelSubscription(subscription.asaas_id);
+    }
+
+    const checkout = await this.asaasService.createPlanSubscription(userId, planType, period, document);
+
+    if (checkout.asaasId) {
+      await this.prisma.subscription.update({
+        where: { user_id: userId },
+        data: {
+          asaas_id: checkout.asaasId,
+          plan_type: planType,
+          period,
+          status: 'PENDING',
+          asaas_payment_id: null,
+          current_period_start: null,
+          current_period_end: null,
+          payment_failed_at: null,
+          payment_failure_reason: null,
+        },
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        user_id: userId,
+        action: 'SUBSCRIPTION_PLAN_CHANGED',
+        entity: 'Subscription',
+        entity_id: subscription.id,
+        details: {
+          from_plan: subscription.plan_type,
+          from_period: subscription.period,
+          to_plan: planType,
+          to_period: period,
+          new_asaas_id: checkout.asaasId,
+        },
+      },
+    });
+
+    return checkout;
+  }
+
+  /**
+   * Lista faturas da assinatura consultando o Asaas diretamente (não persiste localmente).
+   */
+  async getInvoices(userId: string) {
+    const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+
+    if (!subscription?.asaas_id) {
+      return [];
+    }
+
+    return this.asaasService.getSubscriptionInvoices(subscription.asaas_id);
+  }
+
+  /**
+   * CRON a cada 6h: sincroniza assinaturas PENDING há mais de 1h.
+   * Ativa automaticamente quando o webhook não chegou.
+   */
+  @Cron('0 */6 * * *')
+  async syncPendingSubscriptions(): Promise<void> {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const stale = await this.prisma.subscription.findMany({
+      where: { status: 'PENDING', updated_at: { lt: oneHourAgo } },
+      select: { user_id: true, asaas_id: true },
+    });
+
+    if (stale.length === 0) return;
+
+    this.logger.log(`syncPendingSubscriptions: ${stale.length} assinatura(s) PENDING há mais de 1h`);
+
+    let activated = 0;
+    for (const sub of stale) {
+      try {
+        const result = await this.syncWithAsaas(sub.user_id);
+        if (result.activated) activated++;
+      } catch (err) {
+        this.logger.error(`Erro ao sincronizar assinatura de ${sub.user_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    this.logger.log(`syncPendingSubscriptions: ${activated}/${stale.length} ativadas`);
+  }
+
+  /**
    * Rebaixa para FREE via webhook PAYMENT_DELETED ou PAYMENT_REFUNDED.
    */
   async downgradeByAsaasId(asaasId: string, reason: string) {

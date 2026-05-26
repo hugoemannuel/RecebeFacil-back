@@ -24,6 +24,10 @@ describe('SubscriptionService', () => {
   const mockAsaasService = {
     createPlanSubscription: jest.fn(),
     cancelSubscription: jest.fn(),
+    getSubscriptionPaymentUrl: jest.fn(),
+    getPaymentUrlForRetry: jest.fn(),
+    getSubscriptionInvoices: jest.fn(),
+    getLatestPaymentForSubscription: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -369,6 +373,218 @@ describe('SubscriptionService', () => {
     it('deve logar warning e retornar quando asaasId não encontrado', async () => {
       mockPrisma.subscription.findFirst.mockResolvedValueOnce(null);
       await expect(service.activateSubscriptionByAsaasId('asaas-x', 'pay-1')).resolves.not.toThrow();
+    });
+  });
+
+  // ─── retryPayment ─────────────────────────────────────────────
+  describe('retryPayment', () => {
+    it('deve retornar invoiceUrl quando assinatura está OVERDUE', async () => {
+      const sub = { id: 'sub-1', status: 'OVERDUE', asaas_id: 'asaas-1' };
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(sub);
+      mockAsaasService.getPaymentUrlForRetry.mockResolvedValueOnce({ invoiceUrl: 'https://pay.asaas.com/...', paymentId: 'pay-1' });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await service.retryPayment('user-1');
+      expect(result.invoiceUrl).toBe('https://pay.asaas.com/...');
+      expect(result.asaasId).toBe('asaas-1');
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ action: 'PAYMENT_RETRY_REQUESTED' }) }),
+      );
+    });
+
+    it('deve lançar BadRequestException quando assinatura não está OVERDUE', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ id: 'sub-1', status: 'ACTIVE' });
+      await expect(service.retryPayment('user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('deve lançar BadRequestException quando assinatura não existe', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(null);
+      await expect(service.retryPayment('user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('deve lançar BadRequestException quando asaas_id ausente', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ id: 'sub-1', status: 'OVERDUE', asaas_id: null });
+      await expect(service.retryPayment('user-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── reactivateSubscription ───────────────────────────────────
+  describe('reactivateSubscription', () => {
+    it('deve criar checkout para assinatura CANCELED', async () => {
+      const sub = { id: 'sub-1', status: 'CANCELED', plan_type: PlanType.PRO, period: 'MONTHLY', asaas_id: 'old-asaas' };
+      mockPrisma.subscription.findUnique
+        .mockResolvedValueOnce(sub)     // reactivateSubscription check
+        .mockResolvedValueOnce(null);   // createCheckout dedup check
+      mockAsaasService.createPlanSubscription.mockResolvedValueOnce({
+        invoiceUrl: 'https://...', asaasId: 'new-asaas', status: 'PENDING',
+      });
+      mockPrisma.subscription.upsert.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await service.reactivateSubscription('user-1');
+      expect(result.invoiceUrl).toBeDefined();
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ action: 'SUBSCRIPTION_REACTIVATION_INITIATED' }) }),
+      );
+    });
+
+    it('deve lançar BadRequestException quando assinatura não está CANCELED', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ id: 'sub-1', status: 'ACTIVE' });
+      await expect(service.reactivateSubscription('user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('deve lançar BadRequestException quando não há assinatura', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(null);
+      await expect(service.reactivateSubscription('user-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── changePlan ───────────────────────────────────────────────
+  describe('changePlan', () => {
+    it('deve cancelar assinatura atual e criar nova', async () => {
+      const sub = { id: 'sub-1', status: 'ACTIVE', plan_type: PlanType.STARTER, period: 'MONTHLY', asaas_id: 'old-asaas' };
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(sub);
+      mockAsaasService.cancelSubscription.mockResolvedValueOnce(undefined);
+      mockAsaasService.createPlanSubscription.mockResolvedValueOnce({
+        invoiceUrl: 'https://...', asaasId: 'new-asaas', status: 'PENDING',
+      });
+      mockPrisma.subscription.update.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await service.changePlan('user-1', PlanType.PRO, 'MONTHLY');
+      expect(mockAsaasService.cancelSubscription).toHaveBeenCalledWith('old-asaas');
+      expect(mockPrisma.subscription.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ plan_type: PlanType.PRO, status: 'PENDING' }),
+        }),
+      );
+      expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ action: 'SUBSCRIPTION_PLAN_CHANGED' }) }),
+      );
+      expect(result.asaasId).toBe('new-asaas');
+    });
+
+    it('deve lançar BadRequestException quando plano é idêntico ao atual', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({
+        id: 'sub-1', status: 'ACTIVE', plan_type: PlanType.PRO, period: 'MONTHLY',
+      });
+      await expect(service.changePlan('user-1', PlanType.PRO, 'MONTHLY')).rejects.toThrow(BadRequestException);
+    });
+
+    it('deve lançar BadRequestException quando não há assinatura ativa', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ id: 'sub-1', status: 'CANCELED' });
+      await expect(service.changePlan('user-1', PlanType.PRO, 'MONTHLY')).rejects.toThrow(BadRequestException);
+    });
+
+    it('não deve chamar cancelSubscription quando asaas_id é null', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({
+        id: 'sub-1', status: 'ACTIVE', plan_type: PlanType.STARTER, period: 'MONTHLY', asaas_id: null,
+      });
+      mockAsaasService.createPlanSubscription.mockResolvedValueOnce({ invoiceUrl: 'https://...', asaasId: 'new-asaas' });
+      mockPrisma.subscription.update.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await service.changePlan('user-1', PlanType.PRO, 'YEARLY');
+      expect(mockAsaasService.cancelSubscription).not.toHaveBeenCalled();
+    });
+
+    it('deve aceitar mudança de OVERDUE para novo plano', async () => {
+      const sub = { id: 'sub-1', status: 'OVERDUE', plan_type: PlanType.STARTER, period: 'MONTHLY', asaas_id: 'old-asaas' };
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(sub);
+      mockAsaasService.cancelSubscription.mockResolvedValueOnce(undefined);
+      mockAsaasService.createPlanSubscription.mockResolvedValueOnce({ invoiceUrl: 'https://...', asaasId: 'new-asaas' });
+      mockPrisma.subscription.update.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await expect(service.changePlan('user-1', PlanType.PRO, 'YEARLY')).resolves.not.toThrow();
+    });
+  });
+
+  // ─── getInvoices ──────────────────────────────────────────────
+  describe('getInvoices', () => {
+    it('deve retornar faturas quando asaas_id existe', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ asaas_id: 'asaas-1' });
+      mockAsaasService.getSubscriptionInvoices.mockResolvedValueOnce([
+        { id: 'pay-1', value: 99, status: 'RECEIVED', dueDate: '2026-05-01', paymentDate: '2026-05-01', invoiceUrl: null },
+      ]);
+
+      const result = await service.getInvoices('user-1');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('pay-1');
+    });
+
+    it('deve retornar array vazio quando não há assinatura', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce(null);
+      const result = await service.getInvoices('user-1');
+      expect(result).toEqual([]);
+      expect(mockAsaasService.getSubscriptionInvoices).not.toHaveBeenCalled();
+    });
+
+    it('deve retornar array vazio quando asaas_id é null', async () => {
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ asaas_id: null });
+      const result = await service.getInvoices('user-1');
+      expect(result).toEqual([]);
+    });
+  });
+
+  // ─── syncPendingSubscriptions ─────────────────────────────────
+  describe('syncPendingSubscriptions', () => {
+    it('deve sincronizar assinatura PENDING há mais de 1h e ativá-la se confirmada', async () => {
+      mockPrisma.subscription.findMany.mockResolvedValueOnce([
+        { user_id: 'user-1', asaas_id: 'asaas-1' },
+      ]);
+      // syncWithAsaas → findUnique por user_id
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({
+        id: 'sub-1', asaas_id: 'asaas-1', status: 'PENDING', asaas_payment_id: null, period: 'MONTHLY',
+      });
+      mockAsaasService.getLatestPaymentForSubscription.mockResolvedValueOnce({ id: 'pay-1', status: 'CONFIRMED' });
+      // activateSubscriptionByAsaasId → findFirst por asaas_id
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce({
+        id: 'sub-1', user_id: 'user-1', asaas_id: 'asaas-1', asaas_payment_id: null, period: 'MONTHLY',
+      });
+      mockPrisma.subscription.update.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await service.syncPendingSubscriptions();
+
+      expect(mockPrisma.subscription.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ status: 'PENDING' }) }),
+      );
+      expect(mockPrisma.subscription.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'ACTIVE' }) }),
+      );
+    });
+
+    it('deve retornar sem processar quando não há assinaturas PENDING expiradas', async () => {
+      mockPrisma.subscription.findMany.mockResolvedValueOnce([]);
+      await service.syncPendingSubscriptions();
+      expect(mockPrisma.subscription.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('deve continuar processando outros usuários mesmo após erro em um', async () => {
+      mockPrisma.subscription.findMany.mockResolvedValueOnce([
+        { user_id: 'user-1', asaas_id: 'asaas-1' },
+        { user_id: 'user-2', asaas_id: 'asaas-2' },
+      ]);
+      // user-1: erro ao buscar pagamento no Asaas
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({
+        id: 'sub-1', asaas_id: 'asaas-1', status: 'PENDING', asaas_payment_id: null,
+      });
+      mockAsaasService.getLatestPaymentForSubscription
+        .mockRejectedValueOnce(new Error('Asaas timeout'))
+        // user-2: sucesso
+        .mockResolvedValueOnce({ id: 'pay-2', status: 'CONFIRMED' });
+      // user-2: findUnique + findFirst para activateSubscriptionByAsaasId
+      mockPrisma.subscription.findUnique.mockResolvedValueOnce({
+        id: 'sub-2', asaas_id: 'asaas-2', status: 'PENDING', asaas_payment_id: null, period: 'MONTHLY',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValueOnce({
+        id: 'sub-2', user_id: 'user-2', asaas_id: 'asaas-2', asaas_payment_id: null, period: 'MONTHLY',
+      });
+      mockPrisma.subscription.update.mockResolvedValueOnce({});
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      await expect(service.syncPendingSubscriptions()).resolves.not.toThrow();
     });
   });
 

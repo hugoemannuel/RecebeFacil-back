@@ -374,4 +374,35 @@ describe('AsaasWebhookWorker', () => {
       expect(mockPrisma.withdrawalRecord.updateMany).not.toHaveBeenCalled();
     });
   });
+
+  // ─── PAYMENT_RESTORED ─────────────────────────────────────────
+  describe('PAYMENT_RESTORED', () => {
+    it('deve reativar assinatura quando pagamento é restaurado', async () => {
+      const event = {
+        id: 'evt-restored', processed: false, event_type: 'PAYMENT_RESTORED',
+        payload: { payment: { id: 'pay-restored', subscription: 'sub-asaas-restored' } },
+      };
+      mockPrisma.webhookEvent.findUnique.mockResolvedValueOnce(event);
+      mockSubscriptionService.activateSubscriptionByAsaasId.mockResolvedValueOnce(undefined);
+      mockPrisma.webhookEvent.update.mockResolvedValueOnce({});
+
+      await worker.processEvent('evt-restored');
+      expect(mockSubscriptionService.activateSubscriptionByAsaasId).toHaveBeenCalledWith(
+        'sub-asaas-restored',
+        'pay-restored',
+      );
+    });
+
+    it('não deve processar quando subscription ausente no payment', async () => {
+      const event = {
+        id: 'evt-restored-no-sub', processed: false, event_type: 'PAYMENT_RESTORED',
+        payload: { payment: { id: 'pay-x' } },
+      };
+      mockPrisma.webhookEvent.findUnique.mockResolvedValueOnce(event);
+      mockPrisma.webhookEvent.update.mockResolvedValueOnce({});
+
+      await worker.processEvent('evt-restored-no-sub');
+      expect(mockSubscriptionService.activateSubscriptionByAsaasId).not.toHaveBeenCalled();
+    });
+  });
 });

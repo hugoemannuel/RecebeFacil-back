@@ -1,5 +1,6 @@
 import { Controller, Get, Post, UseGuards, Request, Body } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { SubscriptionService } from './subscription.service';
 import { CheckoutDto } from './dto/checkout.dto';
 
@@ -23,20 +24,27 @@ export class SubscriptionController {
     return this.subscriptionService.createCheckout(req.user.id, dto.planType, dto.period, dto.document);
   }
 
-  /**
-   * POST /subscription/retry-payment
-   * Stub para futura integração com Asaas — retentar cobrança do cartão.
-   */
   @Post('retry-payment')
+  @Throttle({ default: { ttl: 300000, limit: 2 } })
   async retryPayment(@Request() req) {
-    return this.subscriptionService.getSubscriptionStatus(req.user.id);
+    return this.subscriptionService.retryPayment(req.user.id);
   }
 
-  /**
-   * POST /subscription/sync
-   * Consulta o Asaas e ativa a assinatura se o pagamento já foi confirmado.
-   * Fallback para quando o webhook não chegou (dev sem ngrok ou falha de rede).
-   */
+  @Post('reactivate')
+  async reactivate(@Request() req) {
+    return this.subscriptionService.reactivateSubscription(req.user.id);
+  }
+
+  @Post('change-plan')
+  async changePlan(@Request() req, @Body() dto: CheckoutDto) {
+    return this.subscriptionService.changePlan(req.user.id, dto.planType, dto.period, dto.document);
+  }
+
+  @Get('invoices')
+  async getInvoices(@Request() req) {
+    return this.subscriptionService.getInvoices(req.user.id);
+  }
+
   @Post('sync')
   async sync(@Request() req) {
     return this.subscriptionService.syncWithAsaas(req.user.id);

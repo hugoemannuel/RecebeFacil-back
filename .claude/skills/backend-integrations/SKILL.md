@@ -4,153 +4,245 @@ description: Integrações do RecebeFácil com Z-API (WhatsApp) e Asaas (gateway
 when_to_use: Quando implementar envio de WhatsApp, webhook do Asaas, CRON de automação, checkout de assinatura, ativação de plano ou transição PENDING → OVERDUE.
 ---
 
-## Z-API — Configuração
+## Z-API — Configuração por Instância
 
-```env
-ZAPI_INSTANCE_ID=
-ZAPI_INSTANCE_TOKEN=
-ZAPI_CLIENT_TOKEN=     # Header obrigatório em todas as chamadas
-ZAPI_BASE_URL=https://api.z-api.io/instances
-DISABLE_WHATSAPP=true  # Em dev: mockar envios, não consumir API real
+Credenciais são **por lojista**, armazenadas em `IntegrationConfig` (não em variáveis de ambiente):
+
+```ts
+// Nunca env vars como fonte primária — usar IntegrationConfig
+const config = await this.prisma.integrationConfig.findUnique({ where: { user_id: userId } });
+const credentials = {
+  instanceId: config.zapi_instance_id,
+  token: config.zapi_instance_token,
+  clientToken: process.env.ZAPI_CLIENT_TOKEN, // header obrigatório
+};
 ```
 
-URL base: `{ZAPI_BASE_URL}/{instanceId}/token/{token}/`
+URL de envio: `https://api.z-api.io/instances/{instanceId}/token/{instanceToken}/send-text`
 
 ## WhatsAppService — Único Ponto de Integração
 
-Nenhum controller chama Z-API diretamente. Apenas `WhatsAppService` encapsula todas as chamadas.
-
-### Endpoints Z-API
+Nenhum controller ou service chama Z-API diretamente. Apenas `src/whatsapp/whatsapp.service.ts`.
 
 ```ts
-// 1. Texto
-POST /send-text
-{ phone: '5511999999999', message: 'Olá *João*! 💰\nSua cobrança vence hoje.' }
-// Suporte: *negrito*, _itálico_, \n, emojis
+// Payload de envio
+{ phone: '5511999999999', message: 'texto' }
 
-// 2. Imagem (QR Code PIX)
-POST /send-image
-{ phone: '5511999999999', image: 'data:image/png;base64,...', caption: 'Escaneie o QR Code' }
-
-// 3. Botão PIX Nativo ⭐ (diferencial)
-POST /send-button-pix
-{ phone: '5511999999999', pixKey: '11999999999', type: 'PHONE', merchantName: 'João Barbearia' }
-// type: CPF | CNPJ | PHONE | EMAIL | EVP
-// merchantName: máx 25 chars (protocolo PIX)
+// Response
+{ zapiId: { id: 'abc123' } }  // salvar zapi_message_id em MessageHistory
 ```
 
-### Ordem de Envio
+**Throttle em bulk:** aguardar 1-2s entre mensagens (`await new Promise(r => setTimeout(r, 1500))`).
 
-1. `sendText()` — mensagem principal (sempre)
-2. `sendImage()` — QR Code (se `pix_qr_code_url` configurado)
-3. `sendPixButton()` — botão PIX nativo (se `pix_key` configurado)
+**Opt-out:** `User.whatsapp_opted_out = true` (NOT `IntegrationConfig.allows_automation`).
+Filtrar com `where: { debtor: { whatsapp_opted_out: false } }` antes de enviar.
 
-### MessageHistory após Envio
-
-```ts
-await this.prisma.messageHistory.create({
-  data: {
-    charge_id: charge.id,
-    trigger_type: 'MANUAL',
-    status: 'SENT',                    // ou 'FAILED'
-    zapi_message_id: zapiResponse.id,  // para rastreamento
-    error_details: null,               // se FAILED: logar internamente, nunca expor na API
-  }
-});
-```
-
-### Throttle em Envio em Massa
-
-```ts
-// Aguardar 1-2 segundos entre cada envio para evitar banimento do número
-await new Promise(r => setTimeout(r, 1500));
-```
+---
 
 ## Asaas — Configuração
 
 ```env
-ASAAS_API_KEY=
-ASAAS_WEBHOOK_SECRET=
-ASAAS_API_URL=https://www.asaas.com/api/v3  # sandbox em dev
+ASAAS_API_KEY=           # Chave da conta principal (plataforma)
+ASAAS_WEBHOOK_SECRET=    # Token para validar webhook
+ASAAS_API_URL=           # sandbox.asaas.com (dev) | asaas.com (prod)
 ```
 
-## Fluxo de Checkout (SubscriptionModule)
+`asaas_account_key` de cada lojista fica em `IntegrationConfig` **criptografada AES-256-GCM** (via `CryptoService`). Descriptografar apenas no momento de uso.
 
-```
-POST /subscription/checkout { planType, period }
-  → Verificar asaas_customer_id em IntegrationConfig
-  → Se não tiver: POST /customers no Asaas → salvar asaas_customer_id
-  → POST /payments { customer, value, dueDate, billingType: 'UNDEFINED' }
-  → Retornar { invoiceUrl } → front-end redireciona
-```
+---
 
-## Webhook Asaas — Validação Obrigatória
+## Webhook Asaas — Fluxo Completo (produção atual)
+
+**Rota:** `POST /integrations/asaas/webhook` (não `/webhooks/asaas`)  
+**Acesso:** `@Public()` — validação manual do token
 
 ```ts
-@Post('/webhooks/asaas')
-async handleWebhook(@Req() req, @Headers('asaas-access-token') token: string) {
-  if (token !== process.env.ASAAS_WEBHOOK_SECRET) {
-    throw new UnauthorizedException('Webhook inválido.');
-  }
-  await this.subscriptionService.handleWebhookEvent(req.body);
+// 1. Validar token
+if (!token || token !== process.env.ASAAS_WEBHOOK_SECRET) {
+  throw new UnauthorizedException('Invalid webhook token');
 }
-```
 
-## Idempotência de Webhooks
+// 2. Computar fingerprint SHA-256 para idempotência
+const entityId = body.payment?.id ?? body.subscription?.id ?? body.transfer?.id ?? 'unknown';
+const fingerprint = createHash('sha256').update(`${body.event}:${entityId}`).digest('hex');
 
-```ts
-// activatePlan usa upsert — seguro para chamadas duplicadas:
-await this.prisma.subscription.upsert({
-  where: { user_id: userId },
-  update: { plan_type, status: 'ACTIVE', asaas_payment_id },
-  create: { ... },
+// 3. Verificar duplicata
+const existing = await this.prisma.webhookEvent.findUnique({
+  where: { asaas_event_id: fingerprint },
+  select: { id: true, processed: true },
 });
-// Verificar asaas_payment_id antes de qualquer ação para evitar duplicação
+if (existing?.processed) return { received: true, duplicate: true };
+
+// 4. Salvar WebhookEvent ANTES de responder (garante rastreabilidade)
+const webhookEvent = await this.prisma.webhookEvent.upsert({
+  where: { asaas_event_id: fingerprint },
+  update: {},
+  create: { source: 'ASAAS', event_type: body.event, asaas_event_id: fingerprint, payload: body },
+});
+
+// 5. Enfileirar no pg-boss — SEMPRE responder 200 imediatamente
+await this.pgBoss.send(WEBHOOK_ASAAS_QUEUE, { webhookEventId: webhookEvent.id });
+return { received: true };
 ```
 
-## Eventos Asaas
+## AsaasWebhookWorker — Retry Policy
+
+Fila: `asaas-webhook` | DLQ: `asaas-webhook-dlq`
 
 ```ts
-'PAYMENT_CONFIRMED' → activatePlan() → Subscription.status = 'ACTIVE'
-'PAYMENT_OVERDUE'   → Subscription.status = 'PAST_DUE'
-'PAYMENT_DELETED'   → downgradeToFree(reason)
-'PAYMENT_REFUNDED'  → downgradeToFree(reason)
-```
+// Configuração da fila (em onApplicationBootstrap)
+await pgBoss.instance.createQueue(WEBHOOK_ASAAS_QUEUE, {
+  retryLimit: 5,
+  retryDelay: 30,
+  retryBackoff: true,           // backoff exponencial
+  deadLetter: WEBHOOK_ASAAS_DLQ,
+});
 
-## CRON Jobs
+// Worker
+async processEvent(webhookEventId: string) {
+  const event = await prisma.webhookEvent.findUnique({ where: { id: webhookEventId } });
+  if (!event || event.processed) return; // idempotência
 
-```ts
-// Transição PENDING → OVERDUE (meia-noite todo dia)
-@Cron('0 0 0 * * *')
-async markOverdueCharges() {
-  await this.prisma.charge.updateMany({
-    where: { status: 'PENDING', due_date: { lt: new Date() } },
-    data: { status: 'OVERDUE' },
+  await dispatch(event.event_type, event.payload);
+  await prisma.webhookEvent.update({
+    where: { id: webhookEventId },
+    data: { processed: true, processed_at: new Date() },
   });
 }
-
-// Automação WhatsApp — STARTER/PRO
-@Cron(CronExpression.EVERY_DAY_AT_8AM)
-async sendAutomatedReminders() { ... }
 ```
 
-## Opt-Out do Devedor
+## Eventos Asaas Processados
+
+| Evento | Ação |
+|---|---|
+| `PAYMENT_CONFIRMED` / `PAYMENT_RECEIVED` | Ativar assinatura (`activateSubscriptionByAsaasId`) |
+| `PAYMENT_RESTORED` | Reativar assinatura cancelada |
+| `PAYMENT_OVERDUE` | Grace period 4 dias → downgrade FREE |
+| `PAYMENT_DELETED` / `PAYMENT_REFUNDED` | Downgrade FREE imediato |
+| `SUBSCRIPTION_CANCELED` / `SUBSCRIPTION_DELETED` | Downgrade FREE |
+| `TRANSFER_DONE` | `WithdrawalRecord.status = CONFIRMED` |
+| `TRANSFER_FAILED` | `WithdrawalRecord.status = FAILED` |
+
+---
+
+## Fluxo de Saque Seguro (WithdrawalRecord)
+
+**Rota:** `POST /integrations/finance/withdraw`  
+**Requer:** `@RequiresModule('FINANCE')` (PRO/UNLIMITED)
+
+```
+1. Front-end gera UUID ANTES de enviar (idempotencyKey)
+2. Verificar idempotência: WithdrawalRecord com mesmo idempotencyKey?
+   → PROCESSING/CONFIRMED → retornar estado atual (não reprocessar)
+   → FAILED → permitir novo saque com novo UUID
+3. Descriptografar asaas_account_key via CryptoService
+4. Verificar saldo real no Asaas (AsaasService.getAccountBalance)
+   → balance < value → BadRequestException
+5. Transação Prisma: verificar PENDING/PROCESSING existente → ConflictException
+   → Criar WithdrawalRecord (status: PENDING)
+6. Chamar Asaas FORA da transação (transferViaPixFromSubaccount)
+   → Sucesso: status = PROCESSING, asaas_transfer_id salvo
+   → Falha: status = FAILED, failure_reason salvo
+7. Confirmação assíncrona via webhook TRANSFER_DONE/TRANSFER_FAILED
+```
+
+**Regra crítica:** Transação Prisma → Asaas fora da transação. Nunca inverter essa ordem.
+
+---
+
+## CRON de Automação (lógica real)
+
+**Não é fixo às 8h** — roda a cada hora e verifica quem tem `send_hour` igual à hora atual em BRT:
 
 ```ts
-// Se devedor responder "PARAR" (webhook Z-API):
-await this.prisma.integrationConfig.update({
-  where: { user_id: debtorId },
-  data: { allows_automation: false },
+@Cron('0 * * * *') // toda hora cheia
+async handleDailyBillingSync() {
+  await this.markOverdueCharges();        // PENDING → OVERDUE (PIX direto apenas)
+  const currentHour = this.getBRTHour(); // converte UTC → BRT
+  await this.processAutomationQueue(currentHour);
+}
+
+getBRTHour(): number {
+  return new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }),
+  ).getHours();
+}
+
+// markOverdueCharges: APENAS is_intermediated = false
+await prisma.charge.updateMany({
+  where: { status: 'PENDING', is_intermediated: false, due_date: { lt: today } },
+  data: { status: 'OVERDUE' },
 });
-// Verificar allows_automation antes de qualquer envio automático
 ```
+
+**Filtro de elegibilidade para lembretes:**
+```ts
+// Apenas credores com send_hour = currentHour E plano ATIVO STARTER/PRO/UNLIMITED
+where: {
+  allows_automation: true,
+  send_hour: currentHour,
+  user: { subscription: { status: 'ACTIVE', plan_type: { in: ['STARTER', 'PRO', 'UNLIMITED'] } } }
+}
+```
+
+**Anti-spam:** verificar `MessageHistory` com mesmo `charge_id` + mesmo trigger hoje antes de enviar.
+
+## CRON de Recorrências
+
+```ts
+@Cron('0 0 * * *') // meia-noite UTC
+async handleRecurringChargeGeneration() {
+  const rules = await prisma.recurringCharge.findMany({
+    where: { active: true, next_generation_date: { lte: today } },
+  });
+  for (const rule of rules) {
+    // Verificar max_installments → desativar se atingido
+    // Criar Charge para cada debtor
+    // Avançar next_generation_date
+  }
+}
+```
+
+## CRON de Monitoramento
+
+```ts
+// Diário às 7h: DLQ alert
+@Cron('0 7 * * *')
+async checkDlqHealth() {
+  const stats = await pgBoss.instance.getQueueSize(WEBHOOK_ASAAS_DLQ);
+  if (stats > 5) await prisma.auditLog.create({ data: { action: 'WEBHOOK_DLQ_ALERT', ... } });
+}
+
+// Diário às 8h: saques stuck
+@Cron('0 8 * * *')
+async checkStuckWithdrawals() {
+  // WithdrawalRecord PROCESSING > 24h → WITHDRAWAL_STUCK_ALERT
+}
+```
+
+---
+
+## Fluxo de Checkout de Assinatura
+
+```
+POST /subscription/checkout { planType, period, document? }
+  → getOrCreateCustomer(userId, document?) → asaas_customer_id
+  → createPlanSubscription(userId, planType, period) → invoiceUrl
+  → Salvar Subscription: status = PENDING, asaas_id
+  → Retornar { invoiceUrl } → front redireciona
+  → Usuário paga → webhook PAYMENT_CONFIRMED → ativa plano
+```
+
+---
 
 ## Anti-patterns
 
-- Nunca chamar Z-API diretamente de um controller
-- Nunca commitar `ASAAS_API_KEY` ou credenciais Z-API no git
-- Nunca processar webhook sem validar `asaas-access-token`
-- Nunca processar o mesmo webhook duas vezes — verificar `asaas_payment_id`
-- Nunca armazenar dados de cartão — PCI DSS proibido
-- Nunca logar `asaas_account_key` (criptografar em repouso AES-256)
-- Nunca enviar mensagens agressivas — risco de banimento do número WhatsApp
+- Nunca usar rota `/webhooks/asaas` — a rota correta é `/integrations/asaas/webhook`
+- Nunca processar webhook de forma síncrona — sempre `pg-boss.send()` e responder 200
+- Nunca usar `upsert` de Subscription como idempotência de webhook — usar SHA-256 + WebhookEvent
+- Nunca salvar `asaas_account_key` em plain-text — criptografar com `CryptoService`
+- Nunca chamar Z-API fora do `WhatsAppService`
+- Nunca commitar ASAAS_API_KEY ou tokens Z-API no código
+- Nunca usar `IntegrationConfig.allows_automation` para opt-out de devedor — usar `User.whatsapp_opted_out`
+- Nunca assumir CRON fixo — é por `send_hour` do lojista
+- Nunca marcar cobranças intermediadas como OVERDUE no CRON (`is_intermediated: false` no WHERE)

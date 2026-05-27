@@ -7,25 +7,26 @@ when_to_use: Quando implementar bloqueio de acesso por plano, verificar limite d
 ## Arquivos
 
 ```
-src/common/plan-modules.ts           ← PLAN_MODULES, canAccessModule(), TEMPLATE_LIMITS
-src/common/plan.guard.ts             ← PlanGuard (CanActivate)
-src/common/requires-module.decorator.ts ← @RequiresModule('CLIENTS')
+src/common/plan-modules.ts              ← PLAN_MODULES, canAccessModule(), TEMPLATE_LIMITS
+src/common/plan.guard.ts                ← PlanGuard (CanActivate)
+src/common/requires-module.decorator.ts ← @RequiresModule('FINANCE')
 ```
 
-## PLAN_MODULES — Fonte da Verdade
+## PLAN_MODULES — Fonte da Verdade (valores reais do código)
 
 ```ts
 export const PLAN_MODULES: Record<PlanType, string[]> = {
   FREE:      ['HOME', 'CHARGES'],
-  STARTER:   ['HOME', 'CHARGES', 'CLIENTS', 'REPORTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES'],
-  PRO:       ['HOME', 'CHARGES', 'CLIENTS', 'REPORTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES'],
-  UNLIMITED: ['HOME', 'CHARGES', 'CLIENTS', 'REPORTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES'],
+  STARTER:   ['HOME', 'CHARGES', 'CLIENTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES'],
+  PRO:       ['HOME', 'CHARGES', 'CLIENTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES', 'FINANCE', 'RECURRENCE'],
+  UNLIMITED: ['HOME', 'CHARGES', 'CLIENTS', 'REPORTS', 'EXCEL_IMPORT', 'CUSTOM_TEMPLATES', 'FINANCE', 'RECURRENCE'],
 };
-
-export function canAccessModule(plan: PlanType, module: string): boolean {
-  return PLAN_MODULES[plan]?.includes(module) ?? false;
-}
 ```
+
+**Diferenças críticas:**
+- `REPORTS` → apenas UNLIMITED
+- `FINANCE` e `RECURRENCE` → apenas PRO e UNLIMITED
+- `STARTER` não tem acesso a FINANCE nem RECURRENCE
 
 Qualquer novo módulo → adicionar aqui **primeiro**, antes de criar o controller.
 
@@ -33,111 +34,112 @@ Qualquer novo módulo → adicionar aqui **primeiro**, antes de criar o controll
 
 ```ts
 export const TEMPLATE_LIMITS: Record<PlanType, number | null> = {
-  FREE:      0,     // não pode salvar templates customizados
-  STARTER:   3,
-  PRO:       null,  // ilimitado
+  FREE:      0,     // Não pode salvar templates customizados
+  STARTER:   3,     // Máximo 3 templates
+  PRO:       null,  // Ilimitado
   UNLIMITED: null,
 };
 ```
 
-## @RequiresModule Decorator
+Validado via `canSaveMoreTemplates(plan, currentCount)` no MessageTemplateService.
+
+## PlanGuard — Lógica Real
 
 ```ts
-export const RequiresModule = (module: string) => SetMetadata(MODULE_KEY, module);
-
-// Uso:
-@Get()
-@RequiresModule('CLIENTS')
-async listClients(@Request() req) { ... }
-```
-
-## PlanGuard — Lógica
-
-```ts
+// src/common/plan.guard.ts
 async canActivate(context): Promise<boolean> {
   const requiredModule = this.reflector.getAllAndOverride<string>(MODULE_KEY, [
     context.getHandler(), context.getClass(),
   ]);
-  if (!requiredModule) return true;  // sem decorator = acesso livre
+  if (!requiredModule) return true; // sem decorator = acesso livre
 
-  const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+  const userId = request.user?.id;
+  if (!userId) throw new ForbiddenException('Usuário não autenticado.');
 
-  // PAST_DUE/CANCELED/ausente → trata como FREE
-  const effectivePlan = subscription?.status === 'ACTIVE' ? subscription.plan_type : PlanType.FREE;
+  const subscription = await this.prisma.subscription.findUnique({
+    where: { user_id: userId },
+  });
+
+  // Sem assinatura OU status !== ACTIVE → FREE
+  // OVERDUE, PAUSED, CANCELED, INACTIVE, PENDING = todos viram FREE
+  const plan = subscription?.plan_type ?? PlanType.FREE;
+  const effectivePlan = subscription?.status === 'ACTIVE' ? plan : PlanType.FREE;
 
   if (!canAccessModule(effectivePlan, requiredModule)) {
-    throw new ForbiddenException(`Plano ${effectivePlan} não tem acesso a este módulo.`);
+    throw new ForbiddenException(
+      `Seu plano atual (${effectivePlan}) não tem acesso a este módulo. Faça upgrade para continuar.`
+    );
   }
 
-  request.userPlan = effectivePlan;  // disponível no controller
+  request.userPlan = effectivePlan; // disponível no controller
   return true;
 }
 ```
 
-## Uso Combinado no Controller
+## Uso Correto no Controller
 
 ```ts
-@Controller('clients')
-@UseGuards(AuthGuard('jwt'), PlanGuard)
-export class ClientsController {
-  @Get()
-  @RequiresModule('CLIENTS')
-  async list(@Request() req) { ... }
+// PlanGuard NÃO é global — declarar explicitamente por controller/método
+@UseGuards(PlanGuard)
+@RequiresModule('FINANCE')
+@Post('finance/withdraw')
+async withdraw(@Req() req: Request, @Body() dto: WithdrawDto) {
+  // req.userPlan disponível após PlanGuard executar
+  return this.service.requestWithdrawal(req.user.id, dto);
 }
 ```
 
 ## Limites de Cobranças (ChargesService)
 
 ```ts
-const planLimits = { FREE: 10, STARTER: 50, PRO: 200, UNLIMITED: 999999 };
-const chargeCount = await this.prisma.charge.count({
-  where: { creditor_id: userId, created_at: { gte: startOfMonth } },
+const CHARGE_LIMITS = { FREE: 10, STARTER: 50, PRO: 200, UNLIMITED: 999999 };
+
+const count = await this.prisma.charge.count({
+  where: { creditor_id: userId, created_at: { gte: startOfMonth(new Date()) } },
 });
-if (chargeCount >= planLimits[subscription.plan_type]) {
-  throw new ForbiddenException('LIMIT_REACHED');
+if (count >= CHARGE_LIMITS[effectivePlan]) {
+  throw new ForbiddenException('Limite mensal de cobranças atingido para seu plano.');
 }
 ```
 
-## Recorrências por Plano (ChargesService)
+## Recorrências por Plano (valores reais)
 
 ```ts
-const allowedRecurrences = {
-  FREE:      ['ONCE'],
-  STARTER:   ['ONCE', 'WEEKLY'],
-  PRO:       ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
-  UNLIMITED: ['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY'],
+const ALLOWED_RECURRENCES = {
+  FREE:      [],                                  // sem recorrência
+  STARTER:   ['MONTHLY'],                         // apenas mensal
+  PRO:       ['WEEKLY', 'MONTHLY', 'YEARLY'],
+  UNLIMITED: ['WEEKLY', 'MONTHLY', 'YEARLY'],
 };
-if (!allowedRecurrences[subscription.plan_type]?.includes(dto.recurrence)) {
-  throw new ForbiddenException('RECURRENCE_NOT_ALLOWED');
+```
+
+## Bulk Actions
+
+```ts
+// PRO e UNLIMITED: verificação manual no service
+const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
+const effectivePlan = subscription?.status === 'ACTIVE' ? subscription.plan_type : 'FREE';
+
+if (!['PRO', 'UNLIMITED'].includes(effectivePlan)) {
+  throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
 }
 ```
 
-## Bulk Actions (verificação manual no service)
+## Resposta do GET /subscription/status
 
 ```ts
-async bulkCancel(userId: string, chargeIds: string[]) {
-  const subscription = await this.prisma.subscription.findUnique({ where: { user_id: userId } });
-  if (!subscription || ['FREE', 'STARTER'].includes(subscription.plan_type)) {
-    throw new ForbiddenException('Ações em massa requerem plano PRO ou superior.');
-  }
-  // ...
-}
-```
-
-## Resposta para o Front-End
-
-```ts
-// GET /subscription/status retorna:
 {
-  plan,
-  status,
-  allowed_modules: PLAN_MODULES[plan],  // front-end usa para montar menu
+  plan: effectivePlan,
+  status: subscription?.status ?? 'FREE',
+  allowed_modules: PLAN_MODULES[effectivePlan], // front usa para montar menu
 }
 ```
 
 ## Anti-patterns
 
-- Nunca verificar plano inline no controller — usar PlanGuard ou service
-- Nunca duplicar lógica de PLAN_MODULES em outros arquivos — importar de `plan-modules.ts`
+- Nunca copiar PLAN_MODULES em outro arquivo — importar de `common/plan-modules.ts`
 - Nunca usar `plan === 'PRO' || plan === 'UNLIMITED'` inline — usar `canAccessModule()`
-- Nunca retornar mensagem técnica de 403 — mensagem de negócio legível
+- Nunca assumir que STARTER tem FINANCE — não tem (erro comum)
+- Nunca assumir que PRO tem REPORTS — não tem (só UNLIMITED)
+- Nunca usar `PAST_DUE` — o enum real é `OVERDUE`
+- Nunca verificar plano no controller — sempre via PlanGuard ou service

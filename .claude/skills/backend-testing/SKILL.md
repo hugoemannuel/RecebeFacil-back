@@ -6,46 +6,38 @@ when_to_use: Sempre que criar ou modificar *.service.ts, *.guard.ts, *.worker.ts
 
 ## Regra Central
 
-**Cobertura percentual global NÃO é a métrica.** O objetivo é proteger comportamentos críticos de negócio com testes confiáveis e rápidos.
+Cobertura percentual global **não** é a métrica. O objetivo é proteger comportamentos críticos de negócio com testes confiáveis e rápidos.
 
-Consulte `TESTING_STRATEGY.md` na raiz do projeto para o plano completo.
+## O que Testar (Obrigatório)
 
----
+- Services com lógica de negócio real (charges, subscription, integrations, automation)
+- Guards (`PlanGuard`, `JwtAuthGuard`)
+- Workers de fila (`AsaasWebhookWorker`, `NotificationWorker`)
+- Services de criptografia (`CryptoService`)
+- Qualquer código que toque dados financeiros, PIX ou credenciais
 
-## O Que Testar (e o Que NÃO Testar)
+## O que NÃO Criar Spec
 
-### Testar obrigatoriamente:
-- Services com lógica de negócio real (validações, cálculos, regras de plano, IDOR)
-- Guards (`PlanGuard`, `AuthGuard`)
-- Workers de fila (`NotificationWorker`, `AsaasWebhookWorker`)
-- Services de automação CRON
-- Qualquer código que toque dados financeiros ou PIX
-
-### Não criar spec para:
-- Controllers que só delegam para o service (`return this.service.method(userId, dto)`)
+- Controllers que só delegam (`return this.service.method(userId, dto)`)
 - `PrismaService` (infraestrutura de framework)
-- `AppController` (boilerplate NestJS CLI)
+- `AppController` (boilerplate NestJS)
+- `PgBossService` (wrapper de biblioteca)
 - DTOs puros sem lógica
-- Módulos NestJS em si (registration de providers)
-
----
 
 ## Cobertura Mínima por Módulo Crítico
 
-| Módulo | Mínimo |
-|---|---|
-| `charges/charges.service.ts` | 90% |
-| `subscription/subscription.service.ts` | 90% |
-| `integrations/asaas-webhook.worker.ts` | 90% |
-| `integrations/asaas.service.ts` | 85% |
-| `common/plan.guard.ts` | 85% |
-| `auth/auth.service.ts` | 85% |
-| `automation/automation.service.ts` | 80% |
-| `queue/notification.worker.ts` | 80% |
-| `users/users.service.ts` | 80% |
-| `*.controller.ts` | Não exigido |
-
----
+| Módulo | Arquivo | Mínimo |
+|---|---|---|
+| Charges | `charges.service.ts` | 90% |
+| Subscription | `subscription.service.ts` | 90% |
+| Webhook Worker | `asaas-webhook.worker.ts` | 90% |
+| CryptoService | `crypto.service.ts` | 95% |
+| PlanGuard | `plan.guard.ts` | 85% |
+| Auth | `auth.service.ts` | 85% |
+| Integrations | `integrations.service.ts` | 85% |
+| Automation | `automation.service.ts` | 80% |
+| Users | `users.service.ts` | 80% |
+| `*.controller.ts` | — | Não exigido |
 
 ## Estrutura Padrão de Spec File
 
@@ -54,7 +46,7 @@ Consulte `TESTING_STRATEGY.md` na raiz do projeto para o plano completo.
 jest.mock('bcrypt');
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, ConflictException } from '@nestjs/common';
 import { ChargesService } from './charges.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -62,14 +54,10 @@ describe('ChargesService', () => {
   let service: ChargesService;
 
   const mockPrisma = {
-    charge: {
-      findUnique: jest.fn(),
-      create: jest.fn(),
-      update: jest.fn(),
-      count: jest.fn(),
-    },
+    charge: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), count: jest.fn() },
     subscription: { findUnique: jest.fn() },
     auditLog: { create: jest.fn() },
+    withdrawalRecord: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -82,24 +70,9 @@ describe('ChargesService', () => {
     service = module.get<ChargesService>(ChargesService);
   });
 
-  afterEach(() => jest.clearAllMocks()); // OBRIGATÓRIO
-
-  it('deve estar definido', () => expect(service).toBeDefined());
-
-  describe('createCharge', () => {
-    it('deve criar cobrança com sucesso (plano PRO)', async () => {
-      mockPrisma.subscription.findUnique.mockResolvedValueOnce({ plan_type: 'PRO', status: 'ACTIVE' });
-      mockPrisma.charge.count.mockResolvedValueOnce(0);
-      mockPrisma.charge.create.mockResolvedValueOnce({ id: 'c1' });
-
-      const result = await service.createCharge('user-1', dto);
-      expect(result.success).toBe(true);
-    });
-  });
+  afterEach(() => jest.clearAllMocks()); // OBRIGATÓRIO em todo describe
 });
 ```
-
----
 
 ## Regras Críticas de Mock
 
@@ -109,71 +82,75 @@ mockPrisma.charge.findUnique.mockResolvedValueOnce({ id: 'c1', creditor_id: 'use
 
 // ERRADO: mockResolvedValue sem Once — contamina todos os testes seguintes
 mockPrisma.charge.findUnique.mockResolvedValue({ id: 'c1' }); // NUNCA
-```
 
-### bcrypt (sempre mockar — nunca rodar hash real em teste)
-```typescript
+// bcrypt: sempre mockar — nunca rodar hash real
 jest.mock('bcrypt');
 import * as bcrypt from 'bcrypt';
-
 (bcrypt.compare as jest.Mock).mockResolvedValueOnce(true);
 (bcrypt.hash as jest.Mock).mockResolvedValueOnce('$2b$12$fakehash');
-```
 
-### HttpService (Asaas, Z-API)
-```typescript
+// HttpService (Asaas, Z-API)
 import { of, throwError } from 'rxjs';
-const mockHttpService = { post: jest.fn(), get: jest.fn(), delete: jest.fn() };
-
-mockHttpService.post.mockReturnValueOnce(of({ data: { id: 'pay_001' } }));
-mockHttpService.post.mockReturnValueOnce(
-  throwError(() => ({ response: { data: { errors: [{ description: 'Erro' }] } } }))
-);
+const mockHttp = { post: jest.fn(), get: jest.fn() };
+mockHttp.post.mockReturnValueOnce(of({ data: { id: 'pay_001' } }));
+mockHttp.post.mockReturnValueOnce(throwError(() => new Error('Asaas error')));
 ```
-
----
 
 ## Cenários Obrigatórios por Tipo
 
 ### Services com entidades (IDOR)
+
 ```
 ✅ Caminho feliz — retorna dado do próprio usuário
 ✅ IDOR → ForbiddenException (NUNCA NotFoundException — não vazar existência)
-✅ Recurso inexistente → ForbiddenException
-✅ Plano insuficiente → ForbiddenException com código de erro
+✅ Recurso inexistente → ForbiddenException (não 404)
+✅ Plano insuficiente → ForbiddenException
+✅ SubStatus OVERDUE/PAUSED/CANCELED → tratados como FREE
 ```
 
-### Services financeiros (charges, subscription)
+### Services financeiros (charges, subscription, integrations)
+
 ```
-✅ Limite de plano atingido → LIMIT_REACHED
-✅ Recorrência não permitida → RECURRENCE_NOT_ALLOWED
+✅ Limite de cobranças do plano atingido → ForbiddenException
+✅ Recorrência não permitida pelo plano → ForbiddenException
 ✅ Assinatura OVERDUE/CANCELED → tratada como FREE
-✅ Cálculo de taxa de split: PRO=2%, UNLIMITED=1%
-✅ Idempotência: mesma operação duas vezes não duplica resultado
 ✅ AuditLog criado em ações críticas
-✅ Rollback: se Asaas falha após criar charge local, deleta charge
+✅ Idempotência: operação com mesmo idempotencyKey não reprocessa
+✅ Race condition: saque com PENDING/PROCESSING existente → ConflictException
+✅ Saldo insuficiente no Asaas → BadRequestException
+✅ Chave PIX não salva em plain-text (verificar pix_key_masked)
 ```
 
-### Workers/CRON
+### AsaasWebhookWorker
+
 ```
-✅ Evento/job não encontrado → silencioso (idempotência)
-✅ Evento já processado → ignora
-✅ Falha → incrementa retry_count, relança para DLQ
-✅ Opt-out WhatsApp → não envia
-✅ Anti-spam: mensagem já enviada hoje → não envia
+✅ WebhookEvent não encontrado → silencioso (não lança exceção)
+✅ WebhookEvent já processado → ignorar (idempotência)
+✅ Falha → incrementa retry_count, relança para pg-boss retentar
+✅ PAYMENT_CONFIRMED → ativa assinatura correta
+✅ TRANSFER_DONE → WithdrawalRecord.status = CONFIRMED
+✅ TRANSFER_FAILED → WithdrawalRecord.status = FAILED
 ```
 
 ### Guards
+
 ```
-✅ Sem decorator → permite
+✅ Sem @RequiresModule → permite acesso
 ✅ Sem autenticação → ForbiddenException
-✅ Sem assinatura → trata como FREE
-✅ Status OVERDUE/CANCELED → trata como FREE
-✅ Plano correto ACTIVE → permite
-✅ Plano inferior → ForbiddenException
+✅ Sem assinatura → effectivePlan = FREE
+✅ Status OVERDUE/PAUSED/CANCELED → effectivePlan = FREE
+✅ Plano ACTIVE correto → permite acesso
+✅ Plano insuficiente → ForbiddenException com mensagem de negócio
 ```
 
----
+### Workers/CRON (AutomationService)
+
+```
+✅ Cobrança com devedor opt-out → não envia
+✅ Anti-spam: já enviou hoje → não envia
+✅ Cobrança intermediada → não marcada OVERDUE pelo CRON
+✅ max_installments atingido → regra desativada
+```
 
 ## Padrão IDOR (obrigatório em todo service com entidades)
 
@@ -185,7 +162,7 @@ describe('findOne', () => {
     expect(result.id).toBe('c1');
   });
 
-  it('deve lançar ForbiddenException para cobrança de outro usuário (IDOR)', async () => {
+  it('deve lançar ForbiddenException para cobrança de outro usuário', async () => {
     mockPrisma.charge.findUnique.mockResolvedValueOnce({ id: 'c1', creditor_id: 'outro' });
     await expect(service.findOne('user-1', 'c1')).rejects.toThrow(ForbiddenException);
   });
@@ -197,28 +174,14 @@ describe('findOne', () => {
 });
 ```
 
----
-
-## Pirâmide de Testes
-
-```
-E2E (5%) — 3-5 fluxos críticos de negócio completos
-Integração (35%) — banco PostgreSQL real para módulos críticos
-Unitário (60%) — lógica de negócio com dependências mockadas
-```
-
----
-
 ## Comandos
 
 ```bash
-npm run test          # Suite unitária (rápida, sem banco)
-npm run test:watch    # Modo watch para desenvolvimento
+npm run test          # Suite unitária
+npm run test:watch    # Modo watch
 npm run test:cov      # Cobertura por módulo
 npm run test:e2e      # Smoke tests E2E
 ```
-
----
 
 ## Anti-patterns
 
@@ -229,3 +192,4 @@ npm run test:e2e      # Smoke tests E2E
 - Testar controllers que só delegam (valor zero)
 - Criar spec para PrismaService ou AppController
 - Usar cobertura global como única métrica de qualidade
+- Usar `PAST_DUE` em mocks — o enum correto é `OVERDUE`

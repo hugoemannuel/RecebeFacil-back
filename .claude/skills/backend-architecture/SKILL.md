@@ -1,90 +1,124 @@
 ---
 name: backend-architecture
-description: Arquitetura NestJS do RecebeFácil — módulos, controllers, services, guards e padrões de código. Use ao criar qualquer arquivo no back-end.
+description: Arquitetura NestJS do RecebeF��cil — módulos, controllers, services, guards e padrões de código. Use ao criar qualquer arquivo no back-end.
 when_to_use: Quando criar controllers, services, modules, DTOs, guards ou qualquer novo arquivo no back-end NestJS.
 ---
 
-## Estrutura de Módulos
+## Guards Globais (APP_GUARD)
 
+`JwtAuthGuard` e `ThrottlerGuard` são registrados como `APP_GUARD` no `AppModule` — aplicam em **todas** as rotas automaticamente.
+
+```ts
+// app.module.ts
+providers: [
+  { provide: APP_GUARD, useClass: ThrottlerGuard },  // 100 req/min
+  { provide: APP_GUARD, useClass: JwtAuthGuard },    // JWT obrigatório
+]
 ```
-src/
-  app.module.ts          ← Root: ThrottlerModule global + ThrottlerGuard como APP_GUARD
-  main.ts                ← helmet(), CORS, ValidationPipe global, listen()
 
-  auth/                  ← POST /auth/login, POST /auth/register
-    auth.controller.ts
-    auth.service.ts      ← validateUser, login, register (bcrypt)
-    jwt.strategy.ts      ← valida JWT, verifica is_registered, strip password_hash
-    dto/login.dto.ts | register.dto.ts
+**Nunca usar `@UseGuards(AuthGuard('jwt'))` nos controllers** — o guard já é global.
 
-  charges/               ← CRUD + bulk actions + recurring charges
-    charges.controller.ts ← @UseGuards(AuthGuard('jwt')) na classe inteira
-    charges.service.ts    ← IDOR check, plan limits, shadow user, auditoria
-    dto/create-charge.dto.ts | update-charge-status.dto.ts | update-recurring-charge.dto.ts
+Para rotas públicas, usar o decorator `@Public()`:
 
-  clients/               ← GET/POST/PATCH /clients
-    clients.controller.ts ← @UseGuards(AuthGuard('jwt'), PlanGuard) + @RequiresModule('CLIENTS')
-    clients.service.ts    ← CRUD de Client (credor↔devedor) com IDOR check
-    dto/create-client.dto.ts | update-client.dto.ts
-
-  profiles/              ← GET/PATCH /profiles (CreditorProfile, PIX, logo)
-    profiles.controller.ts ← @UseGuards(AuthGuard('jwt'))
-    profiles.service.ts    ← upsert CreditorProfile, audita PIX_CONFIG_UPDATED
-
-  reports/               ← GET /reports
-    reports.controller.ts
-    reports.service.ts
-
-  automation/            ← CRON jobs para cobranças recorrentes e lembretes WhatsApp
-    automation.service.ts ← @Cron schedules: recurring charge generation, sendAutomatedReminders
-
-  dashboard/             ← GET /dashboard (métricas, gráficos)
-    dashboard.service.ts ← Promise.all paralelo, sem N+1
-
-  integrations/          ← GET/PATCH /integrations/automation, POST /integrations/asaas/acknowledge-split
-    integrations.controller.ts ← @UseGuards(JwtAuthGuard) em todos os endpoints
-    integrations.service.ts    ← getAutomationConfig, updateAutomationConfig (upsert por user_id)
-    dto/update-automation.dto.ts ← @IsBoolean, @IsInt, @Min(1), @Max(30)
-
-  subscription/          ← GET /subscription/status, POST /subscription/checkout, POST /webhooks/asaas
-    subscription.service.ts ← getUserPlan, activatePlan, downgradeToFree
-
-  whatsapp/              ← ÚNICO ponto de integração Z-API
-    whatsapp.service.ts  ← send text, image, PIX button; nunca chamar Z-API fora daqui
-
-  demo/                  ← Endpoint público (sem AuthGuard) para demo da landing page
-    demo.controller.ts   ← POST /demo/send (rate limit por hash SHA-256 do IP)
-    demo.service.ts      ← verifica DemoAttempt (máx por IP), persiste tentativa
-
-  users/
-    users.controller.ts  ← GET/PATCH/DELETE /users/me (perfil, senha, exclusão LGPD)
-    users.service.ts     ← findByEmail, findByPhone, findById, registerUser (shadow user)
-                            getProfile, updateProfile, updatePassword, deleteAccount
-
-  prisma/
-    prisma.service.ts    ← extends PrismaClient, onModuleInit
+```ts
+@Post('webhook')
+@Public()  // desativa JwtAuthGuard para esta rota
+async handleWebhook() { ... }
 ```
+
+`PlanGuard` **não** é global — declarar explicitamente com `@UseGuards(PlanGuard)` quando necessário.
 
 ## Bootstrap (main.ts)
 
 ```ts
-app.use(helmet());
-app.enableCors({ origin: ['http://localhost:3000', 'http://localhost:3001'], credentials: true });
-app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+// Validações de segurança no boot
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('[SEGURANÇA] JWT_SECRET é obrigatório em produção.');
+}
+if (!process.env.DATABASE_URL) {
+  throw new Error('[CONFIG] DATABASE_URL não está definida.');
+}
+
+app.useBodyParser('json', { limit: '1mb' });
+app.use(helmet({ crossOriginResourcePolicy: false }));
+
+// CORS usa env var — não hardcoded
+const allowedOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+  : ['http://localhost:3000'];
+app.enableCors({ origin: allowedOrigins, credentials: true });
+
+app.useGlobalPipes(new ValidationPipe({
+  whitelist: true,
+  forbidNonWhitelisted: true,
+  transform: true,
+}));
 ```
 
-## AuthGuard — Uso Obrigatório
+## Estrutura de Módulos (16 módulos)
+
+```
+src/
+├── app.module.ts          ← Raiz: APP_GUARD (Throttler + JWT), ScheduleModule
+├── main.ts                ← Bootstrap: helmet, CORS via FRONTEND_URL, ValidationPipe
+├── auth/                  ← POST /auth/login, /auth/register; JWT strategy
+├── users/                 ← GET/PATCH/DELETE /users/me; LGPD (anonimização)
+├── charges/               ← CRUD cobranças, recorrências, bulk, notify
+├── clients/               ← GET/POST/PATCH /clients (vínculo credor↔devedor)
+├── profiles/              ← GET/PATCH /profiles (CreditorProfile, PIX, logo)
+├── subscription/          ← Planos, checkout, faturas, sync com Asaas
+├── integrations/          ← Asaas API, saques, split, webhook controller + worker
+├── automation/            ← CRON: recorrências (meia-noite) + lembretes (horário)
+├── dashboard/             ← GET /dashboard/metrics (Promise.all paralelo)
+├── reports/               ← GET /reports (stub — não implementado)
+├── whatsapp/              ← WhatsAppService (único ponto Z-API)
+├── queue/                 ← PgBossService (pg-boss)
+├── webhooks/              ← ZapiWebhookModule (mensagens entrantes Z-API)
+├── demo/                  ← POST /demo/send (público, rate limit por IP hash)
+└── prisma/                ← PrismaService singleton (global)
+```
+
+## Padrão de Módulo
+
+```
+src/nome-modulo/
+├── nome-modulo.module.ts         ← Declaração NestJS
+├── nome-modulo.controller.ts     ← Rotas, extração de userId, guards
+├── nome-modulo.service.ts        ← Toda lógica de negócio
+├── dto/
+│   ├── create-nome.dto.ts
+│   └── update-nome.dto.ts
+└── spec/
+    └── nome-modulo.service.spec.ts  ← Obrigatório para services com lógica
+```
+
+## Padrão de Controller (sem lógica de negócio)
 
 ```ts
 @Controller('charges')
-@UseGuards(AuthGuard('jwt'))  // aplica em TODOS os métodos da classe
-export class ChargesController { ... }
+export class ChargesController {
+  constructor(private readonly chargesService: ChargesService) {}
+
+  @Get()
+  @UseGuards(PlanGuard)
+  @RequiresModule('CHARGES')
+  findAll(@Req() req: Request) {
+    return this.chargesService.findAll(req.user.id);  // sempre userId do JWT
+  }
+
+  @Post()
+  @UseGuards(PlanGuard)
+  @RequiresModule('CHARGES')
+  create(@Req() req: Request, @Body() dto: CreateChargeDto) {
+    return this.chargesService.createCharge(req.user.id, dto);
+  }
+}
 ```
 
-## JWT Strategy
+## JWT Strategy (src/auth/jwt.strategy.ts)
 
 ```ts
-async validate(payload) {
+async validate(payload: { sub: string }) {
   const user = await this.usersService.findById(payload.sub);
   if (!user || !user.is_registered) throw new UnauthorizedException();
   const { password_hash, ...secureUser } = user;
@@ -92,61 +126,53 @@ async validate(payload) {
 }
 ```
 
-## Padrão de Controller
+Shadow Users (`is_registered: false`) são **rejeitados automaticamente** pela strategy.
+
+## IDOR — Padrão Obrigatório nos Services
 
 ```ts
-@Get()
-async findAll(@Request() req) {
-  return this.service.findAll(req.user.id);  // sempre passa userId do JWT
-}
+// Listagens: WHERE creditor_id = userId
+const charges = await this.prisma.charge.findMany({
+  where: { creditor_id: userId },
+});
+
+// Por ID: fetch → validar → 403 (nunca 404)
+const charge = await this.prisma.charge.findUnique({ where: { id } });
+if (!charge) throw new ForbiddenException();
+if (charge.creditor_id !== userId) throw new ForbiddenException();
 ```
 
-## IDOR — Padrão Obrigatório em Services
-
-```ts
-// Opção 1: where composto (listagens)
-this.prisma.charge.findMany({ where: { creditor_id: userId } });
-
-// Opção 2: check manual (por ID)
-const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
-if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
-// Retorna ForbiddenException (não 404) — internamente usa findUnique sem expor existência
-```
-
-## Auditoria — Ações Obrigatórias
+## Auditoria — Ações Críticas
 
 ```ts
 await this.prisma.auditLog.create({
   data: {
     user_id: userId,
-    action: 'CHARGE_CREATED',  // SNAKE_UPPER_CASE
-    entity: 'Charge',
-    entity_id: charge.id,
-    details: { ... },          // NUNCA incluir senhas, tokens, cartões
+    action: 'WITHDRAWAL_REQUESTED',  // SNAKE_UPPER_CASE
+    entity: 'WithdrawalRecord',
+    entity_id: record.id,
+    details: { value, pix_key_type },  // NUNCA incluir: senhas, tokens, chave PIX completa
+    ip_address: req.ip,
   }
 });
 ```
 
-Actions auditadas: `CHARGE_CREATED`, `CHARGE_CANCELED`, `CHARGE_BULK_CANCELED`, `PIX_CONFIG_UPDATED`, `PROFILE_UPDATED`, `SUBSCRIPTION_ACTIVATED`, `SUBSCRIPTION_DOWNGRADED`, `USER_REGISTERED_NEW`, `USER_REGISTERED_FROM_SHADOW`, `PASSWORD_CHANGED`, `ACCOUNT_DELETED`
-
-## Rate Limiting (AppModule)
+## Rate Limiting por Rota
 
 ```ts
-ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])  // 100 req/min global
-// APP_GUARD: ThrottlerGuard
+// Global: 100 req/min (AppModule)
+// Por rota:
+@Throttle({ default: { ttl: 900000, limit: 5 } })   // 5/15min → /auth/login
+@Throttle({ default: { ttl: 3600000, limit: 10 } })  // 10/1h  → /auth/register
+@Throttle({ default: { ttl: 60000, limit: 1 } })     // 1/min  → /finance/withdraw
+@Throttle({ default: { ttl: 300000, limit: 2 } })    // 2/5min → /subscription/retry-payment
 ```
-
-## Testes — Regra Inegociável
-
-Cada `*.service.ts`, `*.controller.ts`, `*.guard.ts` → arquivo `*.spec.ts` correspondente.
-
-Cenários obrigatórios: happy path, sem assinatura (FREE), assinatura CANCELED/PAST_DUE, acesso negado a módulo premium.
-
-Mock obrigatório: PrismaService, JwtService, APIs externas (Z-API, Asaas).
 
 ## Anti-patterns
 
-- Nunca expor stack trace em produção
-- Nunca logar senhas, tokens JWT, chaves PIX, dados de cartão
-- Nunca `$queryRaw` com concatenação de string — sempre template literal parametrizado
-- Nunca fazer verificação de propriedade apenas no controller — sempre no service
+- Nunca `@UseGuards(AuthGuard('jwt'))` nos controllers — guard já é global via APP_GUARD
+- Nunca lógica de negócio no controller — apenas delegação ao service
+- Nunca hardcodar origem CORS — usar `FRONTEND_URL` env var
+- Nunca verificar propriedade de recurso no controller — sempre no service
+- Nunca criar módulo sem arquivo `*.service.spec.ts` se o service tem lógica real
+- Nunca expor `password_hash` em nenhum endpoint

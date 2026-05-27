@@ -9,156 +9,167 @@ when_to_use: Quando criar endpoints, DTOs, lógica de autenticação, queries po
 ```ts
 app.useGlobalPipes(new ValidationPipe({
   whitelist: true,              // remove campos não declarados no DTO
-  forbidNonWhitelisted: true,   // rejeita request com campos extras
+  forbidNonWhitelisted: true,   // rejeita request com campos extras (400)
   transform: true,
 }));
 ```
+
+Nunca desabilitar o `whitelist` — campos extras aceitos = mass assignment.
 
 ## DTOs com class-validator
 
 ```ts
 export class CreateChargeDto {
-  @IsString() @IsNotEmpty() debtor_name: string;
-  @IsNumber() @Min(100) amount: number;             // mínimo 100 centavos (R$ 1,00)
-  @IsString() @MaxLength(200) description: string;
-  @IsEnum(['ONCE', 'WEEKLY', 'MONTHLY', 'YEARLY']) recurrence: string;
-  @IsOptional() @IsEnum(['CPF', 'CNPJ', 'PHONE', 'EMAIL', 'EVP']) pix_key_type?: string;
+  @IsString() @IsNotEmpty()
+  description: string;
+
+  @IsInt() @Min(1)
+  amount: number;  // centavos — nunca Float
+
+  @IsOptional()
+  @IsEnum(PixKeyType)
+  pix_key_type?: PixKeyType;
 }
 ```
+
+Nunca `@Body() data: any` — sempre DTO validado.
 
 ## IDOR — Padrão Obrigatório
 
 ```ts
-// Where composto para listagens:
+// Where composto para listagens — nunca listar sem creditor_id:
 this.prisma.charge.findMany({ where: { creditor_id: userId } });
 
 // Check manual para operações por ID:
-const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
-if (!charge || charge.creditor_id !== userId) throw new ForbiddenException();
-// Retorna ForbiddenException para não revelar existência do recurso a terceiros
+const charge = await this.prisma.charge.findUnique({ where: { id } });
+if (!charge) throw new ForbiddenException();           // Nunca NotFoundException
+if (charge.creditor_id !== userId) throw new ForbiddenException(); // Nunca 404
 ```
 
-## Senhas
+**Por que 403 e não 404?** 404 expõe que o recurso existe — permite enumeração de IDs.
+
+## Senhas — bcrypt
 
 ```ts
-const password_hash = await bcrypt.hash(dto.password, 12);  // mínimo 10 rounds
+const password_hash = await bcrypt.hash(dto.password, 12);  // MÍNIMO 12 rounds (não 10)
 const isMatch = await bcrypt.compare(pass, user.password_hash);
 
-// SEMPRE strip antes de retornar:
+// SEMPRE strip antes de retornar — nunca expor password_hash:
 const { password_hash, ...secureUser } = user;
 return secureUser;
 ```
 
-## JWT — Configuração
+Em testes: sempre `jest.mock('bcrypt')` — nunca rodar hash real.
+
+## JWT
 
 ```ts
-secretOrKey: process.env.JWT_SECRET || 'fallback-dev-only'
-// JWT_SECRET OBRIGATÓRIO em produção via env
-// ignoreExpiration: false (nunca true)
+// jwt.module.ts
+JwtModule.register({
+  secret: process.env.JWT_SECRET || 'super-secret-default-key-for-dev-only',
+  signOptions: { expiresIn: '7d' },
+})
+// JWT_SECRET obrigatório em produção — processo encerra no boot se ausente
 ```
 
-## Rate Limiting Global
-
-```ts
-// AppModule: ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])
-// Para rotas mais sensíveis:
-@Throttle({ default: { ttl: 900000, limit: 5 } })  // 5 tentativas / 15 min
-@Post('/auth/login')
-```
-
-## SQL Injection
-
-```ts
-// CORRETO — template literal do Prisma (parametrizado automaticamente):
-await this.prisma.$queryRaw`SELECT * FROM "User" WHERE id = ${id}`;
-
-// PROIBIDO — concatenação de string:
-// this.prisma.$queryRaw(`SELECT * FROM User WHERE id = '${id}'`)
-```
-
-Prisma ORM previne automaticamente — usar `$queryRaw` apenas se estritamente necessário.
+Shadow Users (`is_registered: false`) são rejeitados pela JwtStrategy antes de chegar ao controller.
 
 ## User Enumeration — Prevenção
 
 ```ts
 // NUNCA expor que e-mail/telefone já existe:
-throw new ConflictException('Não foi possível realizar o cadastro. Verifique os dados informados.');
-// Log real apenas internamente:
-console.error(`[Auth] E-mail já em uso: ${dto.email}`);
+throw new UnauthorizedException('Credenciais inválidas.');
+
+// Nunca:
+throw new ConflictException('E-mail já cadastrado.'); // expõe existência
 ```
+
+## Rate Limiting
+
+Global: 100 req/min (ThrottlerGuard como APP_GUARD).
+
+Rotas sensíveis com throttle específico:
+
+| Rota | Limite |
+|---|---|
+| POST /auth/login | 5 / 15 min |
+| POST /auth/register | 10 / 1h |
+| POST /integrations/finance/withdraw | 1 / min |
+| POST /subscription/retry-payment | 2 / 5 min |
+| POST /demo/send | 1 por IP (lifetime via DemoAttempt) |
+
+## Criptografia em Repouso (CryptoService)
+
+`asaas_account_key` de cada lojista é criptografada com AES-256-GCM.
+
+```ts
+// src/common/crypto.service.ts
+// Sempre criptografar antes de salvar:
+const encrypted = this.crypto.encrypt(plainAccountKey);
+await prisma.integrationConfig.update({ data: { asaas_account_key: encrypted } });
+
+// Descriptografar apenas no momento de uso:
+const plainKey = this.crypto.decrypt(config.asaas_account_key);
+// Usar imediatamente — não persistir em variável de longa duração
+```
+
+`ENCRYPTION_KEY`: string hex de 64 chars (32 bytes). Se perdida, todas as `asaas_account_key` se tornam inacessíveis permanentemente.
 
 ## O Que NUNCA Logar
 
-- Senhas em plain-text
-- Tokens JWT completos
-- `ASAAS_API_KEY`, `ZAPI_INSTANCE_TOKEN`, `ZAPI_CLIENT_TOKEN`
-- Números de cartão, CVV, validade (PCI DSS)
-- Chaves PIX dos lojistas
-- `error_details` de MessageHistory (coluna interna)
+- `password_hash`
+- Tokens JWT
+- `ASAAS_API_KEY`, `ASAAS_WEBHOOK_SECRET`
+- `asaas_account_key` (criptografada ou descriptografada)
+- `zapi_instance_token`, `ZAPI_CLIENT_TOKEN`
+- Chave PIX completa
+- Dados de cartão (PAN, CVV, validade)
+- `ENCRYPTION_KEY`
+- `error_details` de `MessageHistory` (apenas logs internos)
 
-## Headers de Segurança
-
-```ts
-app.use(helmet());  // obrigatório no main.ts
-```
-
-## CORS
-
-```ts
-app.enableCors({ origin: ['http://localhost:3000', 'http://localhost:3001'], credentials: true });
-// Em produção: trocar para domínio real
-```
+**AuditLog.details nunca pode conter nenhum dos campos acima.**
 
 ## Variáveis de Ambiente Críticas
 
 ```env
-JWT_SECRET=              # OBRIGATÓRIO em produção
-ASAAS_API_KEY=           # Nunca no código-fonte
-ASAAS_WEBHOOK_SECRET=    # Para validar webhooks
-ZAPI_INSTANCE_ID=
-ZAPI_INSTANCE_TOKEN=
-ZAPI_CLIENT_TOKEN=
-DATABASE_URL=
+JWT_SECRET=           # OBRIGATÓRIO — processo encerra se ausente em produção
+DATABASE_URL=         # OBRIGATÓRIO — processo encerra se ausente
+ENCRYPTION_KEY=       # 64 chars hex — se perdida, credenciais Asaas inacessíveis
+ASAAS_API_KEY=        # Nunca no código-fonte
+ASAAS_WEBHOOK_SECRET= # Validar webhooks
+FRONTEND_URL=         # CORS — múltiplas origens separadas por vírgula
 ```
 
-Nunca commitar `.env` (`.gitignore` já inclui). Em produção: AWS Secrets Manager ou Railway ENV.
-
-## Mass Assignment — Anti-pattern Crítico
-
-Nunca passar `@Body() data: any` direto para o Prisma sem DTO. Um atacante pode sobrescrever qualquer campo do model.
+## Webhook Asaas — Validação Obrigatória
 
 ```ts
-// PROIBIDO:
-@Patch('automation')
-async update(@Body() data: any) {
-  return this.service.update(userId, data as any); // vazamento de todos os campos
+// Rota é @Public() — validação manual obrigatória
+if (!token || token !== process.env.ASAAS_WEBHOOK_SECRET) {
+  throw new UnauthorizedException('Invalid webhook token');
 }
-
-// CORRETO:
-@Patch('automation')
-async update(@Body() dto: UpdateAutomationDto) {
-  return this.service.update(userId, dto); // ValidationPipe filtra campos não declarados
-}
-
-// No service: expansão explícita (nunca spread direto do DTO no Prisma):
-return this.prisma.integrationConfig.upsert({
-  update: {
-    ...(dto.allows_automation !== undefined && { allows_automation: dto.allows_automation }),
-    ...(dto.automation_days_before !== undefined && { automation_days_before: dto.automation_days_before }),
-  },
-  create: { user_id: userId, ...dto },
-});
 ```
 
-## Arquivos de Upload
+## LGPD — Direito ao Esquecimento
 
-Nunca commitar arquivos binários de usuários (`uploads/`). Sempre incluir `uploads/` no `.gitignore`. Violação: dados de usuário em git history (LGPD).
+`DELETE /users/account` não deleta — anonimiza:
+- `name`, `phone` → hash anônimo
+- `email`, `password_hash`, `avatar_url` → null
+
+Registros financeiros e `AuditLog` são mantidos por obrigação legal.
+
+## Headers de Segurança
+
+```ts
+// main.ts — helmet com crossOriginResourcePolicy desabilitado para servir uploads/
+app.use(helmet({ crossOriginResourcePolicy: false }));
+```
 
 ## Anti-patterns
 
-- Nunca `ignoreExpiration: true` no JWT Strategy
-- Nunca salvar dados de cartão — todo processamento via Asaas (PCI DSS)
-- Nunca retornar stack trace em produção (`NODE_ENV=production` oculta automaticamente)
-- Nunca usar `Math.random()` para gerar tokens/secrets — usar `crypto`
-- Nunca `@Body() data: any` — sempre DTO com class-validator
-- Nunca `update: data as any` no Prisma — expansão explícita de campos permitidos
+- Nunca `ignoreExpiration: true` no JwtStrategy
+- Nunca salvar dados de cartão — PCI DSS proibido (tudo via Asaas)
+- Nunca retornar stack trace em produção
+- Nunca `Math.random()` para tokens — usar `crypto.randomBytes()`
+- Nunca `@Body() data: any` — sempre DTO
+- Nunca spread DTO diretamente no Prisma — expansão explícita de campos permitidos
+- Nunca `console.error` para logs sensíveis — usar `Logger` do NestJS com contexto
